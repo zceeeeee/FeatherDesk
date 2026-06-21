@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-playwright-mcp"
-version = "0.2.0"
+version = "0.1.0"
 description = "MCP server for agentic browser automation with Playwright — AI writes scripts, we execute them"
 requires-python = ">=3.11"
 license = "MIT"

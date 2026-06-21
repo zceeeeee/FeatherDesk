@@ -14,4 +14,4 @@ Agentic Playwright MCP — AI 驱动的浏览器自动化框架。
     browser-agent run "帮我在百度搜索 Python 教程"
 """
 
-__version__ = "0.2.0"
+__version__ = "0.1.0"
