@@ -1,0 +1,1 @@
+screenshot("page.png")
