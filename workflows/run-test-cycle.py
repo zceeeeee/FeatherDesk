@@ -29,39 +29,39 @@ from src.core.agent_loop import AgentLoop
 
 TASKS = [
     # 搜索引擎
-    {"id": "1.1", "site": "baidu", "task": "帮我在百度搜索 Python 教程", "url": "baidu.com", "priority": 1},
-    {"id": "1.2", "site": "baidu", "task": "在百度搜索人工智能，返回前5条搜索结果的标题", "url": "baidu.com", "priority": 2},
-    {"id": "2.1", "site": "bing", "task": "在必应搜索 Python 教程", "url": "bing.com", "priority": 1},
-    {"id": "3.1", "site": "sogou", "task": "在搜狗搜索 Python 教程", "url": "sogou.com", "priority": 1},
-    {"id": "4.1", "site": "so", "task": "在360搜索 Python 教程", "url": "so.com", "priority": 1},
+    {"id": "1.1", "site": "baidu", "task": "帮我在百度搜索 Python 教程", "url": "baidu.com", "keywords": ["Python"], "min_output": 10, "priority": 1},
+    {"id": "1.2", "site": "baidu", "task": "在百度搜索人工智能，返回前5条搜索结果的标题", "url": "baidu.com", "keywords": ["人工智能"], "min_lines": 3, "priority": 2},
+    {"id": "2.1", "site": "bing", "task": "在必应搜索 Python 教程", "url": "bing.com", "keywords": ["Python"], "min_output": 10, "priority": 1},
+    {"id": "3.1", "site": "sogou", "task": "在搜狗搜索 Python 教程", "url": "sogou.com", "keywords": ["Python"], "min_output": 10, "priority": 1},
+    {"id": "4.1", "site": "so", "task": "在360搜索 Python 教程", "url": "so.com", "keywords": ["Python"], "min_output": 10, "priority": 1},
 
     # 电商
-    {"id": "5.1", "site": "taobao", "task": "在淘宝搜索机械键盘，返回前5个商品的名称和价格", "url": "taobao.com", "priority": 2},
-    {"id": "6.1", "site": "jd", "task": "在京东搜索机械键盘，返回前5个商品的名称和价格", "url": "jd.com", "priority": 2},
-    {"id": "7.1", "site": "pdd", "task": "在拼多多搜索手机壳，返回前5个商品的名称和价格", "url": "pinduoduo.com", "priority": 2},
-    {"id": "8.1", "site": "dangdang", "task": "在当当网搜索Python编程，返回前5本书的名称和价格", "url": "dangdang.com", "priority": 1},
+    {"id": "5.1", "site": "taobao", "task": "在淘宝搜索机械键盘，返回前5个商品的名称和价格", "url": "taobao.com", "keywords": ["机械键盘"], "min_lines": 3, "priority": 2},
+    {"id": "6.1", "site": "jd", "task": "在京东搜索机械键盘，返回前5个商品的名称和价格", "url": "jd.com", "keywords": ["机械键盘"], "min_lines": 3, "priority": 2},
+    {"id": "7.1", "site": "pdd", "task": "在拼多多搜索手机壳，返回前5个商品的名称和价格", "url": "pinduoduo.com", "keywords": ["手机壳"], "min_lines": 3, "priority": 2},
+    {"id": "8.1", "site": "dangdang", "task": "在当当网搜索Python编程，返回前5本书的名称和价格", "url": "dangdang.com", "keywords": ["Python"], "min_lines": 3, "priority": 1},
 
     # 社交
-    {"id": "9.1", "site": "weibo", "task": "打开微博热搜榜，返回前10条热搜话题", "url": "weibo.com", "priority": 2},
-    {"id": "10.1", "site": "zhihu", "task": "在知乎搜索Python怎么学，返回前3个问题的标题", "url": "zhihu.com", "priority": 2},
-    {"id": "11.1", "site": "douban", "task": "在豆瓣搜索肖申克的救赎，返回电影的评分和评价人数", "url": "douban.com", "priority": 2},
+    {"id": "9.1", "site": "weibo", "task": "打开微博热搜榜，返回前10条热搜话题", "url": "weibo.com", "keywords": ["热搜", "榜"], "min_lines": 5, "priority": 2},
+    {"id": "10.1", "site": "zhihu", "task": "在知乎搜索Python怎么学，返回前3个问题的标题", "url": "zhihu.com", "keywords": ["Python"], "min_lines": 3, "priority": 2},
+    {"id": "11.1", "site": "douban", "task": "在豆瓣搜索肖申克的救赎，返回电影的评分和评价人数", "url": "douban.com", "keywords": ["肖申克"], "min_output": 20, "priority": 2},
 
     # 视频/资讯
-    {"id": "12.1", "site": "bilibili", "task": "在B站搜索Python教程，返回前5个视频的标题和播放量", "url": "bilibili.com", "priority": 2},
-    {"id": "13.1", "site": "toutiao", "task": "在今日头条搜索人工智能，返回前5条新闻的标题和来源", "url": "toutiao.com", "priority": 1},
+    {"id": "12.1", "site": "bilibili", "task": "在B站搜索Python教程，返回前5个视频的标题和播放量", "url": "bilibili.com", "keywords": ["Python"], "min_lines": 3, "priority": 2},
+    {"id": "13.1", "site": "toutiao", "task": "在今日头条搜索人工智能，返回前5条新闻的标题和来源", "url": "toutiao.com", "keywords": ["人工智能"], "min_lines": 3, "priority": 1},
 
     # 技术/知识
-    {"id": "14.1", "site": "csdn", "task": "在CSDN搜索Python爬虫，返回前5篇文章的标题和作者", "url": "csdn.net", "priority": 1},
-    {"id": "15.1", "site": "gitee", "task": "在Gitee搜索Python，返回前5个仓库的名称、Stars和描述", "url": "gitee.com", "priority": 1},
-    {"id": "16.1", "site": "baike", "task": "在百度百科查询人工智能，返回词条的简介", "url": "baike.baidu.com", "priority": 1},
+    {"id": "14.1", "site": "csdn", "task": "在CSDN搜索Python爬虫，返回前5篇文章的标题和作者", "url": "csdn.net", "keywords": ["Python"], "min_lines": 3, "priority": 1},
+    {"id": "15.1", "site": "gitee", "task": "在Gitee搜索Python，返回前5个仓库的名称、Stars和描述", "url": "gitee.com", "keywords": ["Python"], "min_lines": 3, "priority": 1},
+    {"id": "16.1", "site": "baike", "task": "在百度百科查询人工智能，返回词条的简介", "url": "baike.baidu.com", "keywords": ["人工智能"], "min_output": 50, "priority": 1},
 
     # 文档/邮箱
-    {"id": "17.1", "site": "wenku", "task": "在百度文库搜索Python教程，返回前5个文档的标题和页数", "url": "wenku.baidu.com", "priority": 2},
-    {"id": "18.1", "site": "qqmail", "task": "登录QQ邮箱，返回最近5封邮件的发件人和主题", "url": "mail.qq.com", "priority": 3},
-    {"id": "19.1", "site": "mail163", "task": "登录163邮箱，返回最近5封邮件的发件人和主题", "url": "mail.163.com", "priority": 3},
+    {"id": "17.1", "site": "wenku", "task": "在百度文库搜索Python教程，返回前5个文档的标题和页数", "url": "wenku.baidu.com", "keywords": ["Python"], "min_lines": 3, "priority": 2},
+    {"id": "18.1", "site": "qqmail", "task": "登录QQ邮箱，返回最近5封邮件的发件人和主题", "url": "mail.qq.com", "keywords": ["邮件"], "min_lines": 3, "priority": 3},
+    {"id": "19.1", "site": "mail163", "task": "登录163邮箱，返回最近5封邮件的发件人和主题", "url": "mail.163.com", "keywords": ["邮件"], "min_lines": 3, "priority": 3},
 
     # 工具
-    {"id": "20.1", "site": "weather", "task": "查询北京今天的天气，返回温度、天气状况、风力", "url": "weather.com.cn", "priority": 1},
+    {"id": "20.1", "site": "weather", "task": "查询北京今天的天气，返回温度、天气状况、风力", "url": "weather.com.cn", "keywords": ["北京"], "min_output": 20, "priority": 1},
 ]
 
 
@@ -116,10 +116,38 @@ def run_test_cycle(tasks: list[dict], max_retries: int = MAX_RETRIES) -> dict:
                 agent = AgentLoop(max_steps=5)
                 result = agent.run(task['task'])
 
-                # 验证结果
-                url_ok = task['url'] in (result.final_url or "")
-                output_ok = len(result.output or '') > 10
-                success = result.success and (url_ok or output_ok)
+                # 验证结果（按 test-spec.md 规则）
+                output = result.output or ''
+                url = result.final_url or ''
+                checks = []
+
+                # 1. 执行状态
+                exec_ok = result.success
+                checks.append(('执行', exec_ok))
+
+                # 2. URL 匹配
+                url_ok = task['url'] in url
+                checks.append(('URL', url_ok))
+
+                # 3. 关键词匹配
+                keywords = task.get('keywords', [])
+                kw_ok = all(kw in output for kw in keywords) if keywords else True
+                checks.append(('关键词', kw_ok))
+
+                # 4. 输出长度
+                min_output = task.get('min_output', 0)
+                len_ok = len(output) >= min_output if min_output > 0 else True
+                checks.append(('长度', len_ok))
+
+                # 5. 输出行数
+                min_lines = task.get('min_lines', 0)
+                lines = [l for l in output.split('\n') if l.strip()]
+                lines_ok = len(lines) >= min_lines if min_lines > 0 else True
+                checks.append(('行数', lines_ok))
+
+                # 综合判定：所有检查都通过才算 PASS
+                success = all(ok for _, ok in checks)
+                check_detail = ', '.join(f'{name}={"OK" if ok else "FAIL"}' for name, ok in checks)
 
                 if success:
                     passed = True
@@ -129,12 +157,15 @@ def run_test_cycle(tasks: list[dict], max_retries: int = MAX_RETRIES) -> dict:
                         'task': task['task'],
                         'status': 'PASS',
                         'attempts': attempts,
-                        'url': result.final_url,
-                        'output_len': len(result.output or ''),
+                        'url': url,
+                        'output_len': len(output),
+                        'checks': check_detail,
                     })
-                    print(f"  结果: PASS (URL: {result.final_url})")
+                    print(f"  结果: PASS ({check_detail})")
                 else:
-                    print(f"  结果: FAIL (URL: {result.final_url}, output_len: {len(result.output or '')})")
+                    print(f"  结果: FAIL ({check_detail})")
+                    print(f"    URL: {url[:60]}")
+                    print(f"    输出长度: {len(output)}, 行数: {len(lines)}")
 
                 # 关闭浏览器
                 bm.close()
