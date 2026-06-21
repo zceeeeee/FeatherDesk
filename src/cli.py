@@ -445,5 +445,65 @@ def _check_playwright_browsers() -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# gui
+# ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    show_default=True,
+    help="Host to bind the GUI server.",
+)
+@click.option(
+    "--port",
+    default=8080,
+    type=int,
+    show_default=True,
+    help="Port to bind the GUI server.",
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Enable debug mode.",
+)
+def gui(host: str, port: int, debug: bool) -> None:
+    """Launch the web GUI for browser automation.
+
+    Opens a web interface where you can:
+    - Enter natural-language tasks and watch them execute
+    - Browse the skill library
+    - View script history
+
+    Examples:
+
+        agentic-playwright-mcp gui
+
+        agentic-playwright-mcp gui --port 9090 --debug
+    """
+    # Load .env
+    if _ENV_FILE.is_file():
+        from dotenv import load_dotenv
+        load_dotenv(_ENV_FILE, override=False)
+
+    try:
+        from src.gui.app import app
+    except ImportError:
+        click.secho(
+            "GUI dependencies not installed. Run: pip install flask",
+            fg="red",
+            err=True,
+        )
+        sys.exit(1)
+
+    click.echo(f"🚀 Starting GUI at http://{host}:{port}")
+    click.echo(f"   Press Ctrl+C to stop")
+
+    app.run(host=host, port=port, debug=debug)
+
+
 if __name__ == "__main__":
     main()

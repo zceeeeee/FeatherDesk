@@ -1,0 +1,641 @@
+"""
+简易 Web GUI —— 浏览器自动化任务执行界面。
+
+提供:
+- 任务输入和执行
+- 实时执行步骤展示
+- 技能库浏览
+- 脚本查看
+
+启动方式:
+    python -m src.gui.app
+    或
+    browser-agent gui
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+import time
+from pathlib import Path
+
+# 添加项目根目录到路径
+_project_root = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_project_root))
+
+from flask import Flask, render_template_string, request, jsonify
+
+from src.core.agent_loop import AgentLoop, AgentTaskResult
+from src.core.browser_manager import get_browser_manager
+from src.core.script_store import get_script_store
+from src.skill_library.registry import get_skill_registry
+
+
+app = Flask(__name__)
+
+# HTML 模板
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Playwright MCP</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 0;
+            margin-bottom: 30px;
+        }
+        header h1 {
+            text-align: center;
+            font-size: 2em;
+        }
+        header p {
+            text-align: center;
+            opacity: 0.9;
+            margin-top: 10px;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 16px;
+            font-size: 1.2em;
+        }
+        .task-input {
+            display: flex;
+            gap: 12px;
+        }
+        .task-input input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        .task-input input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        .output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .output .step {
+            margin-bottom: 8px;
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .output .step.success {
+            background: rgba(76, 175, 80, 0.2);
+            border-left: 3px solid #4caf50;
+        }
+        .output .step.error {
+            background: rgba(244, 67, 54, 0.2);
+            border-left: 3px solid #f44336;
+        }
+        .output .step.info {
+            background: rgba(33, 150, 243, 0.2);
+            border-left: 3px solid #2196f3;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .status.running {
+            background: #fff3e0;
+            color: #e65100;
+            animation: pulse 1.5s infinite;
+        }
+        .status.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+        }
+        .skill-item {
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+        .skill-item h3 {
+            color: #667eea;
+            font-size: 1em;
+            margin-bottom: 4px;
+        }
+        .skill-item p {
+            font-size: 0.85em;
+            color: #666;
+        }
+        .skill-item .triggers {
+            margin-top: 8px;
+        }
+        .skill-item .trigger {
+            display: inline-block;
+            padding: 2px 8px;
+            background: #e8eaf6;
+            border-radius: 12px;
+            font-size: 0.75em;
+            color: #3f51b5;
+            margin-right: 4px;
+            margin-bottom: 4px;
+        }
+        .options {
+            display: flex;
+            gap: 16px;
+            margin-top: 12px;
+        }
+        .options label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #fff;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 16px;
+        }
+        .tab {
+            padding: 8px 16px;
+            background: #f0f0f0;
+            border: none;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .tab.active {
+            background: #667eea;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>🤖 Agentic Playwright MCP</h1>
+            <p>AI 驱动的浏览器自动化框架 — 输入任务，AI 自动执行</p>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- 任务输入 -->
+        <div class="card">
+            <h2>📝 执行任务</h2>
+            <div class="task-input">
+                <input type="text" id="taskInput" placeholder="输入任务描述，例如：帮我在百度搜索 Python 教程" />
+                <button class="btn btn-primary" id="runBtn" onclick="runTask()">
+                    执行
+                </button>
+            </div>
+            <div class="options">
+                <label>
+                    <input type="checkbox" id="headless" />
+                    无头模式
+                </label>
+                <label>
+                    <input type="checkbox" id="useCloak" />
+                    CloakBrowser 反检测
+                </label>
+                <label>
+                    最大步数:
+                    <input type="number" id="maxSteps" value="10" min="1" max="50" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;" />
+                </label>
+            </div>
+        </div>
+
+        <!-- 执行结果 -->
+        <div class="card">
+            <h2>
+                📊 执行结果
+                <span class="status" id="status" style="display:none;"></span>
+            </h2>
+            <div class="output" id="output">
+                等待执行...
+            </div>
+        </div>
+
+        <!-- 标签页: 技能库 / 脚本历史 -->
+        <div class="card">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('skills')">📚 技能库</button>
+                <button class="tab" onclick="switchTab('scripts')">📜 脚本历史</button>
+            </div>
+
+            <div class="tab-content active" id="tab-skills">
+                <div class="skills-grid" id="skillsGrid">
+                    加载中...
+                </div>
+            </div>
+
+            <div class="tab-content" id="tab-scripts">
+                <div id="scriptsList">
+                    加载中...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 任务执行
+        async function runTask() {
+            const task = document.getElementById('taskInput').value.trim();
+            if (!task) {
+                alert('请输入任务描述');
+                return;
+            }
+
+            const runBtn = document.getElementById('runBtn');
+            const status = document.getElementById('status');
+            const output = document.getElementById('output');
+
+            // 禁用按钮，显示状态
+            runBtn.disabled = true;
+            runBtn.innerHTML = '<span class="spinner"></span> 执行中...';
+            status.style.display = 'inline-block';
+            status.className = 'status running';
+            status.textContent = '执行中';
+            output.innerHTML = '';
+
+            const options = {
+                task: task,
+                headless: document.getElementById('headless').checked,
+                use_cloak: document.getElementById('useCloak').checked,
+                max_steps: parseInt(document.getElementById('maxSteps').value) || 10,
+            };
+
+            try {
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(options),
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    status.className = 'status success';
+                    status.textContent = '完成';
+                    output.innerHTML = formatResult(result);
+                } else {
+                    status.className = 'status error';
+                    status.textContent = '失败';
+                    output.innerHTML = formatResult(result);
+                }
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = '错误';
+                output.innerHTML = `<div class="step error">请求失败: ${error.message}</div>`;
+            } finally {
+                runBtn.disabled = false;
+                runBtn.innerHTML = '执行';
+            }
+        }
+
+        function formatResult(result) {
+            let html = '';
+
+            if (result.steps) {
+                result.steps.forEach(step => {
+                    const cls = step.success ? 'success' : 'error';
+                    html += `<div class="step ${cls}">`;
+                    html += `<strong>Step ${step.step_number} [${step.state}]</strong>: ${step.result || ''}`;
+                    if (step.error) {
+                        html += `<br><span style="color:#f44336">${step.error}</span>`;
+                    }
+                    html += `</div>`;
+                });
+            }
+
+            if (result.output) {
+                html += `<div class="step info"><strong>输出:</strong><br>${escapeHtml(result.output)}</div>`;
+            }
+
+            if (result.error) {
+                html += `<div class="step error"><strong>错误:</strong> ${escapeHtml(result.error)}</div>`;
+            }
+
+            if (result.final_url) {
+                html += `<div class="step info"><strong>最终 URL:</strong> ${result.final_url}</div>`;
+            }
+
+            return html || '无输出';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 标签页切换
+        function switchTab(name) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById(`tab-${name}`).classList.add('active');
+        }
+
+        // 加载技能库
+        async function loadSkills() {
+            try {
+                const response = await fetch('/api/skills');
+                const skills = await response.json();
+
+                const grid = document.getElementById('skillsGrid');
+                if (skills.length === 0) {
+                    grid.innerHTML = '<p>暂无技能</p>';
+                    return;
+                }
+
+                grid.innerHTML = skills.map(skill => `
+                    <div class="skill-item">
+                        <h3>${escapeHtml(skill.name)}</h3>
+                        <p>${escapeHtml(skill.description || '')}</p>
+                        <div class="triggers">
+                            ${(skill.triggers || []).map(t =>
+                                `<span class="trigger">${escapeHtml(t)}</span>`
+                            ).join('')}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                document.getElementById('skillsGrid').innerHTML = `<p>加载失败: ${error.message}</p>`;
+            }
+        }
+
+        // 加载脚本历史
+        async function loadScripts() {
+            try {
+                const response = await fetch('/api/scripts');
+                const scripts = await response.json();
+
+                const list = document.getElementById('scriptsList');
+                if (scripts.length === 0) {
+                    list.innerHTML = '<p>暂无脚本</p>';
+                    return;
+                }
+
+                list.innerHTML = scripts.map(script => `
+                    <div class="skill-item">
+                        <h3>${escapeHtml(script.task)}</h3>
+                        <p>使用 ${script.use_count} 次，成功率 ${(script.success_rate * 100).toFixed(0)}%</p>
+                        <details>
+                            <summary style="cursor:pointer;color:#667eea;margin-top:8px;">查看脚本</summary>
+                            <pre style="background:#f5f5f5;padding:8px;border-radius:4px;margin-top:8px;overflow-x:auto;">${escapeHtml(script.script)}</pre>
+                        </details>
+                    </div>
+                `).join('');
+            } catch (error) {
+                document.getElementById('scriptsList').innerHTML = `<p>加载失败: ${error.message}</p>`;
+            }
+        }
+
+        // 回车执行
+        document.getElementById('taskInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') runTask();
+        });
+
+        // 页面加载
+        loadSkills();
+        loadScripts();
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route("/")
+def index():
+    """主页。"""
+    return render_template_string(HTML_TEMPLATE)
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    """执行任务 API。"""
+    data = request.json
+    task = data.get("task", "")
+    headless = data.get("headless", False)
+    use_cloak = data.get("use_cloak", False)
+    max_steps = data.get("max_steps", 10)
+
+    if not task:
+        return jsonify({"success": False, "error": "任务描述不能为空"})
+
+    try:
+        # 设置环境变量
+        if use_cloak:
+            os.environ["USE_CLOAKBROWSER"] = "true"
+        else:
+            os.environ["USE_CLOAKBROWSER"] = "false"
+
+        # 启动浏览器
+        bm = get_browser_manager()
+        if not bm.is_alive():
+            bm.launch(headless=headless)
+
+        # 执行任务
+        agent = AgentLoop(max_steps=max_steps)
+        result = agent.run(task)
+
+        return jsonify({
+            "success": result.success,
+            "task": result.task,
+            "steps": [
+                {
+                    "step_number": s.step_number,
+                    "state": s.state.value if hasattr(s.state, "value") else str(s.state),
+                    "action": s.action,
+                    "result": s.result,
+                    "success": s.success,
+                    "error": s.error,
+                }
+                for s in result.steps
+            ],
+            "output": result.output,
+            "final_url": result.final_url,
+            "error": result.error,
+        })
+
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+
+
+@app.route("/api/skills")
+def api_skills():
+    """获取技能列表 API。"""
+    try:
+        library_dir = str(_project_root / "src" / "skill_library")
+        registry = get_skill_registry(library_dir=library_dir)
+        skills = registry.list_all()
+
+        return jsonify([
+            {
+                "id": s.id,
+                "name": s.name,
+                "type": s.type,
+                "triggers": s.triggers,
+                "url_patterns": s.url_patterns,
+                "description": s.description,
+            }
+            for s in skills
+        ])
+
+    except Exception as exc:
+        return jsonify([])
+
+
+@app.route("/api/scripts")
+def api_scripts():
+    """获取脚本历史 API。"""
+    try:
+        store = get_script_store()
+        scripts = store.list_all()
+
+        return jsonify([
+            {
+                "id": s.id,
+                "task": s.task,
+                "script": s.script,
+                "use_count": s.use_count,
+                "success_count": s.success_count,
+                "success_rate": s.success_rate,
+                "created_at": s.created_at,
+                "last_used_at": s.last_used_at,
+            }
+            for s in scripts
+        ])
+
+    except Exception as exc:
+        return jsonify([])
+
+
+@app.route("/api/status")
+def api_status():
+    """获取系统状态 API。"""
+    bm = get_browser_manager()
+    return jsonify({
+        "browser_running": bm.is_alive(),
+        "engine": bm.engine if bm.is_alive() else None,
+    })
+
+
+def main():
+    """启动 GUI。"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Agentic Playwright MCP GUI")
+    parser.add_argument("--host", default="127.0.0.1", help="监听地址")
+    parser.add_argument("--port", type=int, default=8080, help="监听端口")
+    parser.add_argument("--debug", action="store_true", help="调试模式")
+
+    args = parser.parse_args()
+
+    print(f"🚀 启动 GUI: http://{args.host}:{args.port}")
+    print(f"   按 Ctrl+C 停止")
+
+    app.run(host=args.host, port=args.port, debug=args.debug)
+
+
+if __name__ == "__main__":
+    main()
