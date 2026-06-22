@@ -1,0 +1,11 @@
+base_url: https://so.toutiao.com
+locators:
+  search_button:
+    css:
+    - .search-btn
+    - button[type='submit']
+  search_input:
+    css:
+    - input[placeholder*='搜索']
+    - .search-input
+name: toutiao

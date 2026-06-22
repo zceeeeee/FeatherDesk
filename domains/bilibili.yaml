@@ -1,0 +1,11 @@
+base_url: https://www.bilibili.com
+locators:
+  search_button:
+    css:
+    - .nav-search-btn
+    - .search-btn
+  search_input:
+    css:
+    - .nav-search-input
+    - input[placeholder*='搜索']
+name: bilibili

@@ -1,0 +1,11 @@
+base_url: https://www.douban.com
+locators:
+  search_button:
+    css:
+    - .bn
+    - input[type='submit']
+  search_input:
+    css:
+    - '#inp-query'
+    - input[name='q']
+name: douban

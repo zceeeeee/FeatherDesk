@@ -1,0 +1,11 @@
+base_url: https://www.zhihu.com
+locators:
+  search_button:
+    css:
+    - .SearchBar-searchButton
+    - button[type='submit']
+  search_input:
+    css:
+    - .Input-wrapper input
+    - input[name='q']
+name: zhihu

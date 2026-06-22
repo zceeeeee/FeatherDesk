@@ -1,0 +1,11 @@
+base_url: https://s.weibo.com
+locators:
+  search_button:
+    css:
+    - '[node-type=''searchbtn'']'
+    - .search-btn
+  search_input:
+    css:
+    - '#search-input'
+    - input[name='q']
+name: weibo

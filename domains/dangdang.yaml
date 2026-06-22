@@ -1,0 +1,11 @@
+base_url: https://www.dangdang.com
+locators:
+  search_button:
+    css:
+    - .button
+    - input[type='submit']
+  search_input:
+    css:
+    - '#key_S'
+    - input[name='key']
+name: dangdang

@@ -1,0 +1,11 @@
+base_url: https://so.csdn.net
+locators:
+  search_button:
+    css:
+    - .toolbar-search-btn
+    - button[type='submit']
+  search_input:
+    css:
+    - '#toolbar-search-input'
+    - input[name='q']
+name: csdn

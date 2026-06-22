@@ -1,0 +1,11 @@
+base_url: https://cn.bing.com
+locators:
+  search_button:
+    css:
+    - '#sb_form_go'
+    - button[type='submit']
+  search_input:
+    css:
+    - '#sb_form_q'
+    - textarea[name='q']
+name: bing

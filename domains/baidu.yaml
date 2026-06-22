@@ -1,0 +1,12 @@
+base_url: https://www.baidu.com
+locators:
+  search_button:
+    css:
+    - '#su'
+    - input[type='submit']
+  search_input:
+    css:
+    - '#kw'
+    - input[name='wd']
+    - .s_ipt
+name: baidu

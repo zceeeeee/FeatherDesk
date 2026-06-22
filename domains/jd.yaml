@@ -1,0 +1,11 @@
+base_url: https://www.jd.com
+locators:
+  search_button:
+    css:
+    - .button
+    - button[type='submit']
+  search_input:
+    css:
+    - '#key'
+    - input[name='keyword']
+name: jd

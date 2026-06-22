@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 
@@ -33,125 +34,75 @@ class TaskIntent:
 
 
 class ScriptGenerator:
-    """根据任务描述生成 Python 脚本。"""
+    """根据任务描述生成 Python 脚本。
 
-    # 搜索引擎/网站配置
-    SEARCH_ENGINES = {
-        "baidu": {
-            "url": "https://www.baidu.com",
-            "input": "#kw",
-            "submit": "#su",
-            "name": "百度",
-        },
-        "google": {
-            "url": "https://www.google.com",
-            "input": "textarea[name='q']",
-            "submit": "input[name='btnK']",
-            "name": "Google",
-        },
-        "bing": {
-            "url": "https://cn.bing.com",
-            "input": "#sb_form_q",
-            "submit": "#sb_form_go",
-            "name": "必应",
-        },
-        "sogou": {
-            "url": "https://www.sogou.com",
-            "input": "#query",
-            "submit": "#stb",
-            "name": "搜狗",
-        },
-        "so": {
-            "url": "https://www.so.com",
-            "input": "#input",
-            "submit": "#search-button",
-            "name": "360搜索",
-        },
-        "dangdang": {
-            "url": "https://www.dangdang.com",
-            "input": "#key_S",
-            "submit": ".button",
-            "name": "当当",
-        },
-        "csdn": {
-            "url": "https://so.csdn.net/so/search?q=",
-            "input": "#toolbar-search-input",
-            "submit": ".toolbar-search-btn",
-            "name": "CSDN",
-        },
-        "gitee": {
-            "url": "https://search.gitee.com/?type=repository&q=",
-            "input": "#search-input",
-            "submit": ".search-btn",
-            "name": "Gitee",
-        },
-        "baike": {
-            "url": "https://baike.baidu.com",
-            "input": "#query",
-            "submit": ".search-btn",
-            "name": "百度百科",
-        },
-        "toutiao": {
-            "url": "https://so.toutiao.com/search?keyword=",
-            "input": "input[placeholder*='搜索']",
-            "submit": ".search-btn",
-            "name": "今日头条",
-        },
-        "zhihu": {
-            "url": "https://www.zhihu.com/search",
-            "input": ".Input-wrapper input",
-            "submit": ".SearchBar-searchButton",
-            "name": "知乎",
-        },
-        "douban": {
-            "url": "https://www.douban.com",
-            "input": "#inp-query",
-            "submit": ".bn",
-            "name": "豆瓣",
-        },
-        "bilibili": {
-            "url": "https://search.bilibili.com/all?keyword=",
-            "input": ".nav-search-input",
-            "submit": ".nav-search-btn",
-            "name": "B站",
-        },
-        "weibo": {
-            "url": "https://s.weibo.com",
-            "input": "#search-input",
-            "submit": "[node-type='searchbtn']",
-            "name": "微博",
-        },
-        "wenku": {
-            "url": "https://wenku.baidu.com",
-            "input": "#search-input",
-            "submit": ".search-btn",
-            "name": "百度文库",
-        },
-        "taobao": {
-            "url": "https://www.taobao.com",
-            "input": "#q",
-            "submit": ".btn-search",
-            "name": "淘宝",
-        },
-        "jd": {
-            "url": "https://www.jd.com",
-            "input": "#key",
-            "submit": ".button",
-            "name": "京东",
-        },
-        "pdd": {
-            "url": "https://www.pinduoduo.com",
-            "input": "input[placeholder*='搜索']",
-            "submit": ".search-btn",
-            "name": "拼多多",
-        },
-        "weather": {
-            "url": "https://www.weather.com.cn",
-            "input": "#search_input",
-            "submit": ".search-btn",
-            "name": "天气网",
-        },
+    选择器从 domains/*.yaml 加载，不在代码中硬编码。
+    """
+
+    # 网站元数据（URL 和名称，选择器从 YAML 加载）
+    SITE_META = {
+        "baidu": {"url": "https://www.baidu.com", "name": "百度"},
+        "google": {"url": "https://www.google.com", "name": "Google"},
+        "bing": {"url": "https://cn.bing.com", "name": "必应"},
+        "sogou": {"url": "https://www.sogou.com", "name": "搜狗"},
+        "so": {"url": "https://www.so.com", "name": "360搜索"},
+        "dangdang": {"url": "https://www.dangdang.com", "name": "当当"},
+        "csdn": {"url": "https://so.csdn.net", "name": "CSDN"},
+        "gitee": {"url": "https://search.gitee.com", "name": "Gitee"},
+        "baike": {"url": "https://baike.baidu.com", "name": "百度百科"},
+        "toutiao": {"url": "https://so.toutiao.com", "name": "今日头条"},
+        "zhihu": {"url": "https://www.zhihu.com", "name": "知乎"},
+        "douban": {"url": "https://www.douban.com", "name": "豆瓣"},
+        "bilibili": {"url": "https://www.bilibili.com", "name": "B站"},
+        "weibo": {"url": "https://s.weibo.com", "name": "微博"},
+        "wenku": {"url": "https://wenku.baidu.com", "name": "百度文库"},
+        "taobao": {"url": "https://www.taobao.com", "name": "淘宝"},
+        "jd": {"url": "https://www.jd.com", "name": "京东"},
+        "pdd": {"url": "https://www.pinduoduo.com", "name": "拼多多"},
+        "weather": {"url": "https://www.weather.com.cn", "name": "天气网"},
     }
+
+    # URL 直接搜索的网站（不需要填写表单）
+    URL_SEARCH_ENGINES = ["csdn", "gitee", "bilibili", "toutiao"]
+
+    # JS 方式的网站（headless 模式下元素被隐藏）
+    JS_ENGINES = ["baidu", "dangdang", "douban", "wenku", "taobao", "jd", "pdd", "weibo"]
+
+    # URL 直接搜索（不需要填写表单）
+    URL_DIRECT_ENGINES = ["zhihu", "baike", "weather"]
+
+    def __init__(self) -> None:
+        self._selector_cache: dict[str, dict] = {}
+
+    def _load_selectors(self, engine: str) -> dict:
+        """从 domains/*.yaml 加载选择器。"""
+        if engine in self._selector_cache:
+            return self._selector_cache[engine]
+
+        yaml_path = Path(__file__).parent.parent.parent / "domains" / f"{engine}.yaml"
+        if not yaml_path.exists():
+            return {}
+
+        try:
+            import yaml
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+            locators = data.get("locators", {})
+            result = {}
+            if "search_input" in locators:
+                css_list = locators["search_input"].get("css", [])
+                if css_list:
+                    result["input"] = css_list[0]
+            if "search_button" in locators:
+                css_list = locators["search_button"].get("css", [])
+                if css_list:
+                    result["submit"] = css_list[0]
+
+            self._selector_cache[engine] = result
+            return result
+        except Exception:
+            return {}
 
     def generate(self, task: str, page_summary: str = "") -> str | None:
         """根据任务描述生成脚本。
@@ -288,32 +239,16 @@ class ScriptGenerator:
         return f'goto("{url}")\nwait_for_navigation()\nlog("导航完成: {url}")'
 
     def _gen_search(self, keyword: str, engine: str) -> str:
-        cfg = self.SEARCH_ENGINES.get(engine, self.SEARCH_ENGINES["baidu"])
+        meta = self.SITE_META.get(engine, self.SITE_META["baidu"])
+        url = meta["url"]
+        name = meta["name"]
 
         # 某些网站支持 URL 直接搜索
-        url_search_engines = ["csdn", "gitee", "bilibili", "toutiao"]
-        if engine in url_search_engines:
-            return f'goto("{cfg["url"]}{keyword}")\nwait_for_navigation()\nlog("{cfg["name"]}搜索完成: {keyword}")'
-
-        # 某些网站需要用 JS 操作（headless 模式下元素可能被隐藏）
-        js_engines = ["baidu", "dangdang", "douban", "wenku", "taobao", "jd", "pdd", "weibo"]
-        if engine in js_engines:
-            url = cfg["url"]
-            inp = cfg["input"]
-            btn = cfg["submit"]
-            return (
-                f'goto("{url}")\n'
-                f'wait_for_navigation()\n'
-                f"run_js('document.querySelector(\\\"{inp}\\\").value = \\\"{keyword}\\\"')\n"
-                f"run_js('document.querySelector(\\\"{btn}\\\").click()')\n"
-                f'wait(3)\n'
-                f'log("{cfg["name"]}搜索完成: {keyword}")'
-            )
+        if engine in self.URL_SEARCH_ENGINES:
+            return f'goto("{url}")\nwait_for_navigation()\nlog("{name}搜索完成: {keyword}")'
 
         # 某些网站需要用 URL 直接搜索（不需要填写表单）
-        url_search_engines_v2 = ["zhihu", "baike", "weather"]
-        if engine in url_search_engines_v2:
-            url = cfg["url"]
+        if engine in self.URL_DIRECT_ENGINES:
             if engine == "zhihu":
                 return f'goto("https://www.zhihu.com/search?type=content&q={keyword}")\nwait_for_navigation()\nwait(3)\nlog("知乎搜索完成: {keyword}")'
             elif engine == "baike":
@@ -321,14 +256,30 @@ class ScriptGenerator:
             elif engine == "weather":
                 return f'goto("https://www.weather.com.cn/weather1d/101010100.shtml")\nwait_for_navigation()\nwait(3)\nlog("天气查询完成")'
 
+        # 从 YAML 加载选择器
+        selectors = self._load_selectors(engine)
+        inp = selectors.get("input", "input[type='text']")
+        btn = selectors.get("submit", "button[type='submit']")
+
+        # 某些网站需要用 JS 操作（headless 模式下元素可能被隐藏）
+        if engine in self.JS_ENGINES:
+            return (
+                f'goto("{url}")\n'
+                f'wait_for_navigation()\n'
+                f"run_js('document.querySelector(\\\"{inp}\\\").value = \\\"{keyword}\\\"')\n"
+                f"run_js('document.querySelector(\\\"{btn}\\\").click()')\n"
+                f'wait(3)\n'
+                f'log("{name}搜索完成: {keyword}")'
+            )
+
         # 表单搜索（默认）
         return (
-            f'goto("{cfg["url"]}")\n'
+            f'goto("{url}")\n'
             f'wait_for_navigation()\n'
-            f'fill("{cfg["input"]}", "{keyword}")\n'
-            f'click("{cfg["submit"]}")\n'
+            f'fill("{inp}", "{keyword}")\n'
+            f'click("{btn}")\n'
             f'wait_for_navigation()\n'
-            f'log("{cfg["name"]}搜索完成: {keyword}")'
+            f'log("{name}搜索完成: {keyword}")'
         )
 
     def _gen_hot_search(self) -> str:

@@ -1,0 +1,11 @@
+base_url: https://www.so.com
+locators:
+  search_button:
+    css:
+    - '#search-button'
+    - button[type='submit']
+  search_input:
+    css:
+    - '#input'
+    - input[name='q']
+name: so
