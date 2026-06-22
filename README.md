@@ -66,9 +66,11 @@ browser-agent gui --port 8081
 ### CLI
 
 ```bash
+browser-agent setup                                    # 首次配置（交互式）
 browser-agent serve                                    # MCP 服务
 browser-agent run "帮我在百度搜索 Python 教程"          # 单次执行
 browser-agent doctor                                   # 检查环境
+browser-agent gui                                      # 启动 Web GUI
 ```
 
 ### Python SDK
