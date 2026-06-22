@@ -299,7 +299,7 @@ class ScriptGenerator:
                 f'wait_for_navigation()\n'
                 f"run_js('document.querySelector(\\\"{inp}\\\").value = \\\"{keyword}\\\"')\n"
                 f"run_js('document.querySelector(\\\"{btn}\\\").click()')\n"
-                f'wait_for_navigation()\n'
+                f'wait(3)\n'
                 f'log("{cfg["name"]}搜索完成: {keyword}")'
             )
 
