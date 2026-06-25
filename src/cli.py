@@ -15,8 +15,12 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from src.core.browser_manager import BrowserManager
 
 # ---------------------------------------------------------------------------
 # Project paths
@@ -211,7 +215,7 @@ def run(task: str, max_steps: int, headless: bool, slow_mo: int) -> None:
 
         result = run_task(task, max_steps=max_steps)
 
-        # Print step-by-step progress
+        # 打印每步进度（所有结果路径都会经过这里）
         for step in result.steps:
             status = (
                 click.style("OK", fg="green")
@@ -237,13 +241,36 @@ def run(task: str, max_steps: int, headless: bool, slow_mo: int) -> None:
 
         if result.error:
             click.secho(f"\nError: {result.error}", fg="red")
+            _keep_browser_open_and_wait(bm, keep_open)
             sys.exit(1)
+
+        _keep_browser_open_and_wait(bm, keep_open)
 
     except Exception as exc:
         click.secho(f"Agent loop error: {exc}", fg="red", err=True)
+        _keep_browser_open_and_wait(bm, keep_open)
         sys.exit(1)
-    finally:
-        bm.close()
+
+
+def _keep_browser_open_and_wait(bm: "BrowserManager", keep_open: bool) -> None:
+    """任务结束后：如果 keep_open 则切到最新页面并等待按 Enter；否则直接关闭。"""
+    if keep_open:
+        try:
+            # 切到最新的页面/弹窗，避免用户看到的是旧页面以为被关了
+            if bm._context is not None and bm._context.pages:
+                latest = bm._context.pages[-1]
+                latest.bring_to_front()
+                click.echo(f"  → 切换到最新窗口: {latest.url}")
+        except Exception:
+            pass
+        click.echo()
+        click.echo("Browser kept open. Press Enter here to close it.")
+        try:
+            input()
+        except (EOFError, OSError):
+            # stdin 不可用（如后台进程），静默关闭
+            pass
+    bm.close()
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -31,6 +32,9 @@ from src.core.script_store import get_script_store  # noqa: E402
 from src.skill_library.registry import get_skill_registry  # noqa: E402
 
 app = Flask(__name__)
+
+# 全局浏览器状态（keep_open 时跨请求保持）
+_g_browser_manager = None
 
 # HTML 模板
 HTML_TEMPLATE = """
@@ -292,6 +296,10 @@ HTML_TEMPLATE = """
                     最大步数:
                     <input type="number" id="maxSteps" value="10" min="1" max="50" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;" />
                 </label>
+                <label>
+                    <input type="checkbox" id="keepOpen" />
+                    完成后保持浏览器打开
+                </label>
             </div>
         </div>
 
@@ -353,6 +361,7 @@ HTML_TEMPLATE = """
                 headless: document.getElementById('headless').checked,
                 use_cloak: document.getElementById('useCloak').checked,
                 max_steps: parseInt(document.getElementById('maxSteps').value) || 10,
+                keep_open: document.getElementById('keepOpen').checked,
             };
 
             try {
@@ -512,12 +521,14 @@ def api_run():
     """
     from src.core.browser_manager import reset_browser_manager
     from src.core.script_engine import reset_script_engine
+    from src.skill_library.registry import reset_skill_registry
 
     data = request.json
     task = data.get("task", "")
     headless = data.get("headless", False)
     use_cloak = data.get("use_cloak", False)
     max_steps = data.get("max_steps", 10)
+    keep_open = data.get("keep_open", False)
 
     if not task:
         return jsonify({"success": False, "error": "任务描述不能为空"})
@@ -531,11 +542,19 @@ def api_run():
 
         # 重置所有状态（确保线程安全）
         reset_script_engine()
-        reset_browser_manager()
+        reset_skill_registry()
+        if not keep_open:
+            reset_browser_manager()
 
-        # 在当前线程启动浏览器
-        bm = get_browser_manager()
-        bm.launch(headless=headless)
+        # 获取浏览器管理器（keep_open 时复用全局实例）
+        global _g_browser_manager
+        bm = _g_browser_manager
+        browser_was_launched_here = False
+        if bm is None or not bm.is_alive():
+            bm = get_browser_manager()
+            bm.launch(headless=headless)
+            _g_browser_manager = bm
+            browser_was_launched_here = True
 
         # 执行任务
         agent = AgentLoop(max_steps=max_steps)
@@ -544,8 +563,11 @@ def api_run():
         # 保存最终 URL
         final_url = result.final_url or ""
 
-        # 关闭浏览器
-        bm.close()
+        if not keep_open:
+            # 先等待 10 秒让用户查看结果，再关闭浏览器
+            time.sleep(10)
+            bm.close()
+            _g_browser_manager = None
 
         return jsonify(
             {
@@ -645,16 +667,27 @@ def api_status():
     """获取系统状态 API。"""
     from src.config_manager import get_config_manager
 
-    bm = get_browser_manager()
+    global _g_browser_manager
+    bm = _g_browser_manager
     config = get_config_manager()
     return jsonify(
         {
-            "browser_running": bm.is_alive(),
-            "engine": bm.engine if bm.is_alive() else None,
+            "browser_running": bm is not None and bm.is_alive(),
+            "engine": bm.engine if bm is not None and bm.is_alive() else None,
             "configured": config.is_configured(),
             "vision_provider": config.get("vision.provider", ""),
         }
     )
+
+
+@app.route("/api/close-browser", methods=["POST"])
+def api_close_browser():
+    """手动关闭浏览器（用于 keep_open 后用户检查完毕）。"""
+    global _g_browser_manager
+    if _g_browser_manager is not None and _g_browser_manager.is_alive():
+        _g_browser_manager.close()
+    _g_browser_manager = None
+    return jsonify({"success": True})
 
 
 @app.route("/api/config", methods=["GET"])

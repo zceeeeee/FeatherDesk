@@ -18,6 +18,7 @@ from typing import Any, Callable
 from src.core.browser_manager import get_browser_manager
 from src.core.event_bus import EVENT_SCRIPT_EXECUTE, Event, Phase, get_event_bus
 from src.layer_1.actions import do_click, do_fill, do_goto, do_screenshot
+from src.layer_2.controls import press
 
 # ---------------------------------------------------------------------------
 # 数据模型
@@ -219,6 +220,10 @@ class ScriptEngine:
             selector_list = [selector] + list(fallbacks)
             return do_fill(page, selector_list, value)
 
+        # 安全的 press（支持选择器列表）
+        def safe_press(selector: str, key: str, *fallbacks: str) -> dict:
+            return press(selector, key, *fallbacks)
+
         # 构建命名空间
         ns: dict[str, Any] = {"__builtins__": _SAFE_BUILTINS}
 
@@ -226,6 +231,7 @@ class ScriptEngine:
         ns["goto"] = safe_goto
         ns["click"] = safe_click
         ns["fill"] = safe_fill
+        ns["press"] = safe_press
         ns["screenshot"] = safe_screenshot
 
         # 注入工具函数

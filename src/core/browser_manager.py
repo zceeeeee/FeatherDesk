@@ -120,6 +120,10 @@ class BrowserManager:
         )
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
+        
+        # 自动处理对话框：默认接受（避免阻塞）
+        self._page.on("dialog", lambda dialog: dialog.accept())
+        
         log_browser_event("launched", engine="playwright", headless=headless)
 
         after_event = Event(
@@ -173,6 +177,10 @@ class BrowserManager:
         self._browser = cloakbrowser.launch(**launch_kwargs)
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
+        
+        # 自动处理对话框：默认接受（避免阻塞）
+        self._page.on("dialog", lambda dialog: dialog.accept())
+        
         log_browser_event(
             "launched", engine="cloakbrowser", headless=headless, humanize=humanize
         )

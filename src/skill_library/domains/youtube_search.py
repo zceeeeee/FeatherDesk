@@ -9,12 +9,18 @@ def run(keyword: str):
     """
     goto("https://www.youtube.com")
     wait_for_navigation()
-    fill("input[name='search_query']", keyword)
-    click("button#search-icon-legacy")
+    # 先尝试在输入框直接按 Enter（适合 URL 直接跳转的场景）
+    # 如果失败，再走传统表单路线
+    fill("input[name='search_query']", keyword,
+         "input#search",
+         "input[aria-label='搜索']")
+    press("input[name='search_query']", "Enter",
+          "input#search",
+          "input[aria-label='搜索']")
     wait_for_navigation()
     log(f"YouTube 搜索完成: {keyword}")
 
 
 # 选择器备选方案:
-# search_input: input[name='search_query'] → #search → input[id='search']
-# search_button: button#search-icon-legacy → button[aria-label='搜索']
+# search_input: input[name='search_query'] → #search → input[aria-label='搜索']
+# 提交方式: press(Enter) 优先，回退到 click button

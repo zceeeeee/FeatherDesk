@@ -582,6 +582,32 @@ def get_page_text() -> str:
         return f"提取文本失败: {exc}"
 
 
+def press(selector: str, key: str, *fallbacks: str) -> dict:
+    """在元素上按键盘键。
+
+    Args:
+        selector: 目标元素选择器。
+        key: 按键名称（如 "Enter", "Tab", "Escape"）。
+        fallbacks: 备选选择器列表。
+
+    Returns:
+        dict: 成功时含 success, used_selector, index；
+              失败时含 success, error。
+    """
+    page = get_browser_manager().get_page()
+    selector_list = [selector] + list(fallbacks)
+    for i, sel in enumerate(selector_list):
+        try:
+            if page.is_visible(sel, timeout=1000):
+                page.press(sel, key, timeout=5000)
+                return {"success": True, "used_selector": sel, "index": i}
+        except PlaywrightTimeoutError:
+            continue
+        except Exception:
+            continue
+    return {"success": False, "error": f"按键失败: {selector_list}"}
+
+
 def screenshot(path: str) -> str:
     """对当前页面截图。
 
@@ -657,6 +683,7 @@ def get_controls_exports() -> Dict[str, Any]:
     return {
         # 导航
         "goto": goto,
+        "press": press,
         "go_back": go_back,
         "go_forward": go_forward,
         "reload": reload_page,

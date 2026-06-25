@@ -151,6 +151,42 @@ def do_click(
     return result
 
 
+def do_press(
+    page: Page,
+    selector_list: List[str],
+    key: str,
+    timeout: int = 5000,
+) -> dict:
+    """在元素上按键，支持多选择器自愈。
+
+    Args:
+        page: Playwright 页面实例。
+        selector_list: 候选选择器列表。
+        key: 按键名称（如 "Enter", "Tab"）。
+        timeout: 单次按键的超时时间（毫秒）。
+
+    Returns:
+        dict: 成功时含 success, used_selector, index；
+              失败时含 success, error, screenshot。
+    """
+    for i, selector in enumerate(selector_list):
+        try:
+            if page.is_visible(selector, timeout=1000):
+                page.press(selector, key, timeout=timeout)
+                return {"success": True, "used_selector": selector, "index": i}
+        except PlaywrightTimeoutError:
+            continue
+        except Exception:
+            continue
+
+    screenshot_path = _save_error_screenshot(page, "press")
+    return {
+        "success": False,
+        "error": f"按键失败: {selector_list}",
+        "screenshot": screenshot_path,
+    }
+
+
 def do_fill(
     page: Page,
     selector_list: List[str],

@@ -24,7 +24,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable
 
 from src.core.browser_manager import get_browser_manager
 from src.core.event_bus import (
@@ -48,6 +49,18 @@ from src.logging import bind_context, get_logger, log_timing
 from src.skill_library.registry import SkillRegistry, get_skill_registry
 
 logger = get_logger(__name__)
+
+
+def _default_library_dir() -> str | None:
+    """自动推断默认的技能库目录。"""
+    # 从当前文件位置推断项目根目录
+    current = Path(__file__).resolve()
+    # src/core/agent_loop.py → 项目根目录/src/skill_library
+    project_root = current.parent.parent.parent
+    library_dir = project_root / "src" / "skill_library"
+    if library_dir.exists():
+        return str(library_dir)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +135,7 @@ class AgentLoop:
             event_bus: EventBus 实例。为 None 时使用全局单例。
         """
         self._max_steps = max_steps
-        self._library_dir = library_dir
+        self._library_dir = library_dir if library_dir is not None else _default_library_dir()
         self._on_step = on_step
         self._bus = event_bus if event_bus is not None else get_event_bus()
 
