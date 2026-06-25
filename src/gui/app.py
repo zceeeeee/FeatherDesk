@@ -540,6 +540,8 @@ def api_run():
         else:
             os.environ["USE_CLOAKBROWSER"] = "false"
 
+        library_dir = str(_project_root / "src" / "skill_library")
+
         # 重置所有状态（确保线程安全）
         reset_script_engine()
         reset_skill_registry()
@@ -557,7 +559,7 @@ def api_run():
             browser_was_launched_here = True
 
         # 执行任务
-        agent = AgentLoop(max_steps=max_steps)
+        agent = AgentLoop(max_steps=max_steps, library_dir=library_dir)
         result = agent.run(task)
 
         # 保存最终 URL
