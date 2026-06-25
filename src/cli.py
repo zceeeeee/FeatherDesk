@@ -180,7 +180,13 @@ def serve(transport: str, host: str, port: int, debug: bool) -> None:
     show_default=True,
     help="Slow-down between actions (ms). Useful for headed debugging.",
 )
-def run(task: str, max_steps: int, headless: bool, slow_mo: int) -> None:
+@click.option(
+    "--keep-open/--no-keep-open",
+    default=False,
+    show_default=True,
+    help="Keep browser open after task completes instead of closing it.",
+)
+def run(task: str, max_steps: int, headless: bool, slow_mo: int, keep_open: bool) -> None:
     """Execute a natural-language TASK and print the result.
 
     Launches a browser, runs the agent loop, prints output, and exits.

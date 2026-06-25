@@ -61,6 +61,8 @@ class ScriptGenerator:
         "jd": {"url": "https://www.jd.com", "name": "京东"},
         "pdd": {"url": "https://www.pinduoduo.com", "name": "拼多多"},
         "weather": {"url": "https://www.weather.com.cn", "name": "天气网"},
+        "youtube": {"url": "https://www.youtube.com", "name": "YouTube"},
+        "github": {"url": "https://github.com", "name": "GitHub"},
     }
 
     # URL 直接搜索的网站（不需要填写表单）
@@ -79,7 +81,7 @@ class ScriptGenerator:
     ]
 
     # URL 直接搜索（不需要填写表单）
-    URL_DIRECT_ENGINES = ["zhihu", "baike", "weather"]
+    URL_DIRECT_ENGINES = ["zhihu", "baike", "weather", "youtube", "github"]
 
     def __init__(self) -> None:
         self._selector_cache: dict[str, dict] = {}
@@ -277,6 +279,10 @@ class ScriptGenerator:
                 return f'goto("https://baike.baidu.com/item/{keyword}")\nwait_for_navigation()\nwait(3)\nlog("百度百科查询完成: {keyword}")'
             elif engine == "weather":
                 return 'goto("https://www.weather.com.cn/weather1d/101010100.shtml")\nwait_for_navigation()\nwait(3)\nlog("天气查询完成")'
+            elif engine == "youtube":
+                return f'goto("https://www.youtube.com/results?search_query={keyword}")\nwait_for_navigation()\nwait(3)\nlog("YouTube搜索完成: {keyword}")'
+            elif engine == "github":
+                return f'goto("https://github.com/search?q={keyword}")\nwait_for_navigation()\nwait(3)\nlog("GitHub搜索完成: {keyword}")'
 
         # 从 YAML 加载选择器
         selectors = self._load_selectors(engine)
@@ -472,6 +478,10 @@ log("向上滚动")"""
             return "pdd"
         if any(kw in task_lower for kw in ["天气", "weather"]):
             return "weather"
+        if any(kw in task_lower for kw in ["youtube", "油管"]):
+            return "youtube"
+        if any(kw in task_lower for kw in ["github"]):
+            return "github"
         return "baidu"  # 默认百度
 
     def _extract_number(self, task: str, default: int = 5) -> int:
