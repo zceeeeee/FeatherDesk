@@ -11,8 +11,7 @@ def run(keyword: str):
         1. 构造百度搜索结果页 URL
         2. 直接导航到结果页
     """
-    query = url_quote(keyword)
-    goto(f"https://www.baidu.com/s?wd={query}")
+    goto(f"https://www.baidu.com/s?wd={keyword}")
     log(f"百度搜索完成: {keyword}")
 
 
