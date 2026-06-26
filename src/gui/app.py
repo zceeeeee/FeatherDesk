@@ -491,7 +491,14 @@ HTML_TEMPLATE = """
             try {
                 const response = await fetch('/api/auth/current');
                 const result = await response.json();
-                if (!result.browser_running || !result.domain || !result.has_session) {
+                if (!result.browser_running) {
+                    // 浏览器已关闭，更新 UI 状态
+                    const closeBtn = document.getElementById('closeBtn');
+                    if (closeBtn) closeBtn.style.display = 'none';
+                    stopAuthPolling();
+                    return;
+                }
+                if (!result.domain || !result.has_session) {
                     return;
                 }
                 if (promptedSaveDomains.has(result.domain)) {
@@ -547,6 +554,7 @@ HTML_TEMPLATE = """
                 keep_open: keepOpen,
             };
 
+            let taskSuccess = false;
             try {
                 await maybeLoadSavedAuth(task, options);
                 const response = await fetch('/api/run', {
@@ -556,6 +564,7 @@ HTML_TEMPLATE = """
                 });
 
                 const result = await response.json();
+                taskSuccess = result.success;
 
                 if (result.success) {
                     status.className = 'status success';
@@ -573,9 +582,9 @@ HTML_TEMPLATE = """
             } finally {
                 runBtn.disabled = false;
                 runBtn.innerHTML = '执行';
-                // keep_open 模式下显示"关闭浏览器"按钮
+                // 仅在任务成功且 keep_open 时显示"关闭浏览器"按钮和启动轮询
                 const closeBtn = document.getElementById('closeBtn');
-                if (document.getElementById('keepOpen').checked) {
+                if (keepOpen && taskSuccess) {
                     closeBtn.style.display = 'inline-block';
                     startAuthPolling();
                 } else {
@@ -841,12 +850,33 @@ def api_auth_suggest_load():
 @app.route("/api/auth/current")
 def api_auth_current():
     """Inspect the keep-open browser and report whether auth can be saved."""
+    global _active_bm
     bm = _active_bm or get_browser_manager()
     if not bm.is_alive():
+        # 浏览器已关闭，清理引用以避免后续状态不一致
+        if _active_bm is not None:
+            _active_bm = None
+            try:
+                from src.core.browser_manager import reset_browser_manager
+                reset_browser_manager()
+            except Exception:
+                pass
         return jsonify({"browser_running": False})
 
     try:
         page = bm.get_page()
+        # 实际测试页面是否可访问（窗口被关闭但进程还在时 page.url 可能不抛异常）
+        try:
+            page.evaluate("1")
+        except Exception:
+            # 页面不可访问，浏览器已断开
+            _active_bm = None
+            try:
+                from src.core.browser_manager import reset_browser_manager
+                reset_browser_manager()
+            except Exception:
+                pass
+            return jsonify({"browser_running": False})
         current_url = page.url
         domain = bm.current_domain or _domain_from_url(current_url)
         has_session = False
@@ -866,6 +896,14 @@ def api_auth_current():
             }
         )
     except Exception as exc:
+        # 浏览器异常，清理引用
+        if _active_bm is not None:
+            _active_bm = None
+            try:
+                from src.core.browser_manager import reset_browser_manager
+                reset_browser_manager()
+            except Exception:
+                pass
         return jsonify({"browser_running": False, "error": str(exc)})
 
 
@@ -908,12 +946,16 @@ def api_close_browser():
         if _active_bm is not None:
             try:
                 _active_bm.close()
-                _active_bm = None
-                _close_requested = False
+            except Exception:
+                # 浏览器可能已被手动关闭，忽略异常
+                pass
+            # 无论 close 成功与否，都清理引用和标志
+            _active_bm = None
+            _close_requested = False
+            try:
                 from src.core.browser_manager import reset_browser_manager
                 reset_browser_manager()
             except Exception:
-                # 任务仍在运行，close 会失败，靠标志位在任务结束后关闭
                 pass
 
         return jsonify({"success": True})

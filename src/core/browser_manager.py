@@ -61,6 +61,7 @@ class BrowserManager:
         self._page = None
         self._engine: str = "playwright"  # "playwright" | "cloakbrowser"
         self._current_domain: str | None = None
+        self._disconnected: bool = False  # 浏览器是否已断开连接
 
     @property
     def engine(self) -> str:
@@ -109,15 +110,32 @@ class BrowserManager:
             )
 
         self._engine = "playwright"
+        self._disconnected = False
         logger.info(
             "Starting Playwright engine",
             extra={"headless": headless, "slow_mo": slow_mo},
         )
-        self._playwright = sync_playwright().start()
+        try:
+            self._playwright = sync_playwright().start()
+        except RuntimeError as exc:
+            if "asyncio loop" in str(exc).lower():
+                # 上次 stop() 未完全清理，强制重置后重试
+                logger.warning("Playwright asyncio loop conflict, retrying: %s", exc)
+                import asyncio
+
+                asyncio.set_event_loop(asyncio.new_event_loop())
+                self._playwright = sync_playwright().start()
+            else:
+                raise
         self._browser = self._playwright.chromium.launch(
             headless=headless,
             slow_mo=slow_mo,
         )
+        # 监听浏览器断开事件（用户手动关闭窗口时触发）
+        try:
+            self._browser.on("disconnected", self._on_browser_disconnected)
+        except Exception:
+            pass  # 某些 Playwright 版本可能不支持
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
         log_browser_event("launched", engine="playwright", headless=headless)
@@ -157,6 +175,7 @@ class BrowserManager:
 
         cloakbrowser = _import_cloakbrowser()
         self._engine = "cloakbrowser"
+        self._disconnected = False
         logger.info(
             "Starting CloakBrowser engine",
             extra={"headless": headless, "humanize": humanize, "proxy": bool(proxy)},
@@ -171,6 +190,11 @@ class BrowserManager:
             launch_kwargs["proxy"] = proxy
 
         self._browser = cloakbrowser.launch(**launch_kwargs)
+        # 监听浏览器断开事件（用户手动关闭窗口时触发）
+        try:
+            self._browser.on("disconnected", self._on_browser_disconnected)
+        except Exception:
+            pass
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
         log_browser_event(
@@ -190,6 +214,11 @@ class BrowserManager:
         )
         bus.emit(after_event)
         return self._page
+
+    def _on_browser_disconnected(self) -> None:
+        """浏览器断开连接时的回调（用户手动关闭窗口等）。"""
+        logger.info("Browser disconnected detected")
+        self._disconnected = True
 
     def get_page(self) -> Page:
         """返回当前活跃页面。
@@ -218,21 +247,37 @@ class BrowserManager:
             return
 
         logger.info("Closing browser", extra={"engine": self._engine})
-        try:
-            if self._context is not None:
-                self._context.close()
-        except Exception as exc:
-            logger.warning("Error closing context", extra={"error": str(exc)})
-        try:
-            if self._browser is not None:
-                self._browser.close()
-        except Exception as exc:
-            logger.warning("Error closing browser", extra={"error": str(exc)})
-        finally:
-            self._browser = None
-            self._context = None
-            self._page = None
-            self._current_domain = None
+
+        # 在调用 Playwright close 之前，确认浏览器真的还连接着
+        # 用户手动关闭窗口但 Chromium 进程还在时，is_connected() 可能返回 True
+        # 但实际页面已不可访问，此时调用 close() 会触发闪烁
+        if not self._disconnected and self._page is not None:
+            try:
+                self._page.evaluate("1")
+            except Exception:
+                self._disconnected = True
+                logger.info("Browser page unreachable, marking as disconnected")
+
+        if not self._disconnected:
+            try:
+                if self._context is not None:
+                    self._context.close()
+            except Exception as exc:
+                logger.warning("Error closing context", extra={"error": str(exc)})
+            try:
+                if self._browser is not None:
+                    self._browser.close()
+            except Exception as exc:
+                logger.warning("Error closing browser", extra={"error": str(exc)})
+        else:
+            logger.info("Browser already disconnected, skipping Playwright close")
+
+        # 无论是否已断开，都清理引用
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._current_domain = None
+        self._disconnected = False
 
         # CloakBrowser 不需要单独 stop playwright
         if self._engine == "playwright":
@@ -259,12 +304,20 @@ class BrowserManager:
         Returns:
             浏览器已启动且连接有效时返回 True。
         """
-        if self._browser is None:
+        if self._disconnected or self._browser is None:
             return False
         try:
+            # 优先使用 Playwright 原生的 is_connected() 检测
+            if hasattr(self._browser, "is_connected"):
+                connected = self._browser.is_connected()
+                if not connected:
+                    self._disconnected = True
+                return connected
+            # 回退：尝试访问 contexts
             _ = self._browser.contexts
             return True
         except Exception:
+            self._disconnected = True
             return False
 
     # ------------------------------------------------------------------
