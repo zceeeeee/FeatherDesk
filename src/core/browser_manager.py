@@ -309,7 +309,7 @@ class BrowserManager:
         try:
             # 优先使用 Playwright 原生的 is_connected() 检测
             if hasattr(self._browser, "is_connected"):
-                connected = self._browser.is_connected()
+                connected = bool(self._browser.is_connected())
                 if not connected:
                     self._disconnected = True
                 return connected
