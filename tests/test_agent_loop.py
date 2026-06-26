@@ -198,6 +198,32 @@ class TestGitHubLoginScript:
 
         assert 'run("alice", "s3cr3t")' in script
 
+    def test_extract_phone_number_chinese(self):
+        phone_number = AgentLoop._extract_phone_number(
+            "登录小红书，手机号 13800138000"
+        )
+
+        assert phone_number == "13800138000"
+
+    def test_extract_phone_number_with_country_code(self):
+        phone_number = AgentLoop._extract_phone_number(
+            "login xhs phone +86 138-0013-8000"
+        )
+
+        assert phone_number == "13800138000"
+
+    def test_build_xiaohongshu_login_script_passes_phone_number(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(phone_number):\n    log(phone_number)"
+
+        script = agent._build_skill_script(
+            source,
+            "登录小红书，手机号 13800138000",
+            "domain/xiaohongshu_login",
+        )
+
+        assert 'run("13800138000")' in script
+
 
 # ---------------------------------------------------------------------------
 # Full loop

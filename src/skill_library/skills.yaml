@@ -94,6 +94,14 @@ skills:
     version: "1.0.0"
 
   # 社交媒体
+  - id: "domain/xiaohongshu_login"
+    name: "小红书验证码登录"
+    type: "domain"
+    triggers: ["小红书", "xiaohongshu", "xhs", "rednote", "登录", "login", "验证码"]
+    url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com"]
+    description: "填写小红书手机号、勾选协议并获取短信验证码，验证码由用户手动输入"
+    version: "1.0.0"
+
   - id: "domain/weibo_search"
     name: "微博搜索"
     type: "domain"
@@ -184,6 +192,10 @@ sources:
 
   - id: "domain/youtube_search"
     file: "search/youtube_search.py"
+    entry: "run"
+
+  - id: "domain/xiaohongshu_login"
+    file: "others/xiaohongshu_login.py"
     entry: "run"
 
   - id: "domain/weibo_search"

@@ -526,7 +526,7 @@ browser-agent doctor
 | **自主任务** | `run_task("帮我在百度搜索 Python 教程")` | Agent 自动：截图→查技能→执行→返回结果 |
 | **脚本执行** | `run_script(code="goto('https://baidu.com')")` | 沙箱执行，返回结果 |
 | **经验复用** | 自动 | 相同任务第二次执行时自动复用已保存脚本 |
-| **技能查找** | `browse_skills(query="百度")` | 返回匹配的 16 个技能 |
+| **技能查找** | `browse_skills(query="百度")` | 返回匹配的 17 个技能 |
 | **页面分析** | `analyze_page(question="登录按钮在哪？")` | 截图 + LLM 分析页面 |
 | **CLI 调试** | `browser-agent run "截图"` | 单次执行，查看结果 |
 | **Python SDK** | `from src.sdk import AgentLoop` | 代码集成 |

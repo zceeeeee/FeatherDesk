@@ -1,0 +1,53 @@
+id: xiaohongshu_login
+name: 小红书验证码登录
+type: domain
+description: 打开小红书登录页，填写手机号，勾选协议并点击获取验证码；验证码由用户手动输入。
+version: "1.0.0"
+
+triggers:
+  - 小红书
+  - xiaohongshu
+  - xhs
+  - rednote
+  - 登录
+  - login
+  - 验证码
+
+url_patterns:
+  - xiaohongshu.com
+  - "*.xiaohongshu.com"
+
+domain: xiaohongshu
+
+parameters:
+  phone_number:
+    type: string
+    required: true
+    description: 用户手机号，例如 13800138000。
+  login_url:
+    type: string
+    required: false
+    default: "https://www.xiaohongshu.com/login"
+    description: 小红书登录入口 URL。
+
+steps:
+  - action: goto
+    args:
+      url: "{{login_url}}"
+    comment: 打开小红书登录入口
+
+  - action: smart_fill
+    target: phone
+    value: "{{phone_number}}"
+    comment: 填写手机号
+    on_error: stop
+
+  - action: smart_click
+    target: agreement
+    comment: 勾选用户协议和隐私政策
+    on_error: stop
+
+  - action: smart_click
+    target: get_code
+    comment: 点击获取验证码，后续由用户手动输入短信验证码
+    on_error: stop

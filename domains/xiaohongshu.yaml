@@ -1,0 +1,53 @@
+name: xiaohongshu
+base_url: https://www.xiaohongshu.com/login
+locators:
+  phone:
+    css:
+      - "input[placeholder*='手机号']"
+      - "input[placeholder*='手机']"
+      - "input[type='tel']"
+      - "input[name*='phone' i]"
+      - "input[name*='mobile' i]"
+    xpath:
+      - "//input[contains(@placeholder, '手机号') or contains(@placeholder, '手机')]"
+
+  verification_code:
+    css:
+      - "input[placeholder*='验证码']"
+      - "input[name*='code' i]"
+    xpath:
+      - "//input[contains(@placeholder, '验证码')]"
+
+  agreement:
+    css:
+      - "input[type='checkbox']"
+      - "text=我已阅读并同意"
+      - "text=登录即同意"
+    xpath:
+      - "//*[contains(normalize-space(.), '用户协议')]/ancestor::*[.//input[@type='checkbox']][1]//input[@type='checkbox']"
+      - "//*[contains(normalize-space(.), '隐私政策')]/ancestor::*[.//input[@type='checkbox']][1]//input[@type='checkbox']"
+
+  get_code:
+    css:
+      - "input[placeholder*='验证码'] ~ *:has-text('发送验证码')"
+      - "input[placeholder*='验证码'] + *:has-text('发送验证码')"
+      - "input[placeholder*='验证码'] ~ *:has-text('获取验证码')"
+      - "input[placeholder*='验证码'] + *:has-text('获取验证码')"
+      - "text=获取验证码"
+      - "text=发送验证码"
+      - "button:has-text('获取验证码')"
+      - "button:has-text('发送验证码')"
+      - "[role='button']:has-text('获取验证码')"
+      - "[role='button']:has-text('发送验证码')"
+    xpath:
+      - "//input[contains(@placeholder, '验证码')]/following::*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '发送验证码') and not(contains(normalize-space(.), '收不到'))][1]"
+      - "//input[contains(@placeholder, '验证码')]/following::*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '获取验证码') and not(contains(normalize-space(.), '收不到'))][1]"
+      - "//*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '获取验证码') and not(contains(normalize-space(.), '收不到'))]"
+      - "//*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '发送验证码') and not(contains(normalize-space(.), '收不到'))]"
+
+  login_button:
+    css:
+      - "text=登录"
+      - "text=登 录"
+      - "button:has-text('登录')"
+      - "[role='button']:has-text('登录')"

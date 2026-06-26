@@ -57,7 +57,7 @@ graph TB
 | **脚本引擎** | 受限沙箱执行 AI 生成的 Python 脚本 | :material-check: |
 | **经验进化** | 脚本复用 + 选择器经验 + 站点知识 | :material-check: |
 | **控件层** | 15 个高级函数 | :material-check: |
-| **技能库** | 16 个技能（12 站点 + 4 模板） | :material-check: |
+| **技能库** | 17 个技能（13 站点 + 4 模板） | :material-check: |
 | **视觉模块** | 截图 + 多模态 LLM 理解页面 | :material-check: |
 | **自愈机制** | 选择器自动降级 + 优先级提升 | :material-check: |
 | **Web GUI** | 浏览器可视化操作界面 | :material-check: |
@@ -100,5 +100,5 @@ with AgentLoop() as agent:
 | 测试用例 | 570 个 |
 | MCP 工具 | 8 个 |
 | CLI 命令 | 4 个 |
-| 技能库 | 16 个 |
+| 技能库 | 17 个 |
 | 域配置 | 19 个 |

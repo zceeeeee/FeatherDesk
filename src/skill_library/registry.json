@@ -21,6 +21,16 @@
       "description": "登录 GitHub 账号"
     },
     {
+      "id": "xiaohongshu_login",
+      "name": "小红书验证码登录",
+      "type": "domain",
+      "triggers": ["小红书", "xiaohongshu", "xhs", "rednote", "登录", "login", "验证码"],
+      "url_patterns": ["xiaohongshu.com", "*.xiaohongshu.com"],
+      "file": "others/xiaohongshu_login.py",
+      "function": "run",
+      "description": "填写小红书手机号、勾选协议并获取短信验证码"
+    },
+    {
       "id": "login_flow",
       "name": "通用登录",
       "type": "interaction",
