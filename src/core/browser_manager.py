@@ -115,6 +115,17 @@ class BrowserManager:
             "Starting Playwright engine",
             extra={"headless": headless, "slow_mo": slow_mo},
         )
+        # 安全兜底：如果旧 _playwright 实例还在（比如 close() 因断开未完全清理），
+        # 先停掉再启动新的，避免 asyncio loop 冲突
+        if self._playwright is not None:
+            logger.warning("Stale _playwright instance found before launch, stopping it")
+            try:
+                self._playwright.stop()
+            except Exception:
+                import asyncio
+
+                asyncio.set_event_loop(asyncio.new_event_loop())
+            self._playwright = None
         try:
             self._playwright = sync_playwright().start()
         except RuntimeError as exc:
@@ -270,7 +281,15 @@ class BrowserManager:
             except Exception as exc:
                 logger.warning("Error closing browser", extra={"error": str(exc)})
         else:
-            logger.info("Browser already disconnected, skipping Playwright close")
+            # 浏览器已断开，跳过 context.close()（页面已死）
+            # 但必须调 browser.close() — CloakBrowser 把 pw.stop() 绑在了
+            # browser.close() 的 patch 里，不调的话 asyncio loop 永远不会清理
+            logger.info("Browser disconnected, calling close for cleanup")
+            try:
+                if self._browser is not None:
+                    self._browser.close()
+            except Exception as exc:
+                logger.warning("Error closing disconnected browser", extra={"error": str(exc)})
 
         # 无论是否已断开，都清理引用
         self._browser = None
@@ -279,15 +298,34 @@ class BrowserManager:
         self._current_domain = None
         self._disconnected = False
 
-        # CloakBrowser 不需要单独 stop playwright
+        # 清理 Playwright / CloakBrowser 的 asyncio loop
+        # 无论哪个引擎，底层都有 asyncio loop，断开后必须重置
+        import asyncio
+
         if self._engine == "playwright":
             try:
                 if self._playwright is not None:
                     self._playwright.stop()
             except Exception as exc:
-                logger.warning("Error stopping Playwright", extra={"error": str(exc)})
+                logger.warning("Error stopping Playwright, force-resetting asyncio loop: %s", exc)
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.stop()
+                except Exception:
+                    pass
+                asyncio.set_event_loop(asyncio.new_event_loop())
             finally:
                 self._playwright = None
+        else:
+            # CloakBrowser 也需要重置 asyncio loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.stop()
+            except Exception:
+                pass
+            asyncio.set_event_loop(asyncio.new_event_loop())
 
         log_browser_event("closed", engine=self._engine)
 
