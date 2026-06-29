@@ -243,6 +243,37 @@ class TestGitHubLoginScript:
 
         assert 'run("13800138000")' in script
 
+    def test_extract_xiaohongshu_publish_content(self):
+        content = AgentLoop._extract_xiaohongshu_publish_content(
+            "小红书发布图文，电话号码是13574133406，内容是“今天的穿搭灵感”"
+        )
+
+        assert content == "今天的穿搭灵感"
+
+    def test_build_xiaohongshu_publish_script_passes_content_and_optional_phone(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(content, phone_number=None):\n    log(content)"
+
+        script = agent._build_skill_script(
+            source,
+            "小红书发布图文，电话号码是13574133406，内容是“今天的穿搭灵感”",
+            "domain/xiaohongshu_publish",
+        )
+
+        assert 'run("今天的穿搭灵感", phone_number="13574133406")' in script
+
+    def test_build_xiaohongshu_publish_script_allows_missing_phone(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(content, phone_number=None):\n    log(content)"
+
+        script = agent._build_skill_script(
+            source,
+            "小红书发布图文，内容是“今天的穿搭灵感”",
+            "domain/xiaohongshu_publish",
+        )
+
+        assert 'run("今天的穿搭灵感")' in script
+
     def test_build_douyin_login_script_passes_phone_number(self):
         agent = AgentLoop(max_steps=3)
         source = "def run(phone_number):\n    log(phone_number)"
@@ -467,6 +498,41 @@ class TestGitHubLoginScript:
         )
 
         assert selected.id == "domain/bilibili_comment"
+
+    def test_select_xiaohongshu_publish_beats_login(self):
+        from src.skill_library.skill_base import SkillMeta
+
+        agent = AgentLoop(max_steps=3)
+        skills = [
+            SkillMeta(
+                id="domain/xiaohongshu_login",
+                name="小红书验证码登录",
+                type="domain",
+                triggers=["小红书", "xiaohongshu", "xhs", "rednote", "登录", "验证码"],
+                url_patterns=["xiaohongshu.com", "*.xiaohongshu.com"],
+            ),
+            SkillMeta(
+                id="domain/xiaohongshu_publish",
+                name="小红书图文发布",
+                type="domain",
+                triggers=["小红书", "xiaohongshu", "xhs", "rednote", "发布", "图文", "内容", "生成图片"],
+                url_patterns=["xiaohongshu.com", "*.xiaohongshu.com", "creator.xiaohongshu.com"],
+            ),
+            SkillMeta(
+                id="interaction/login_flow",
+                name="通用登录",
+                type="interaction",
+                triggers=["登录", "login"],
+                url_patterns=[],
+            ),
+        ]
+
+        selected = agent._select_best_skill(
+            skills,
+            "小红书发布图文，电话号码是13574133406，内容是“今天的穿搭灵感”",
+        )
+
+        assert selected.id == "domain/xiaohongshu_publish"
 
 # ---------------------------------------------------------------------------
 # Full loop

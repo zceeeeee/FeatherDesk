@@ -631,6 +631,25 @@ class AgentLoop:
                 f"{json.dumps(comment_text, ensure_ascii=False)})"
             )
 
+        if skill_id == "domain/xiaohongshu_publish":
+            phone_number = self._extract_phone_number(task)
+            content = self._extract_xiaohongshu_publish_content(task)
+            if not content:
+                return (
+                    f"{source_code}\n\n"
+                    "raise ValueError('Xiaohongshu publish requires content')"
+                )
+            if phone_number:
+                return (
+                    f"{source_code}\n\n# 自动调用\n"
+                    f"run({json.dumps(content, ensure_ascii=False)}, "
+                    f"phone_number={json.dumps(phone_number, ensure_ascii=False)})"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(content, ensure_ascii=False)})"
+            )
+
         phone_login_sites = {
             "domain/xiaohongshu_login": "Xiaohongshu",
             "domain/douyin_login": "Douyin",
@@ -756,6 +775,50 @@ class AgentLoop:
                 break
 
         return title, body
+
+    @staticmethod
+    def _extract_xiaohongshu_publish_content(task: str) -> str | None:
+        """从任务描述中提取小红书图文发布内容。"""
+        import re
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip()
+            text = text.strip("'\"`“”‘’")
+            text = re.split(r"\s*(?:然后|并且|接着|最后)\s*", text, maxsplit=1)[0]
+            text = re.split(
+                r"\s*(?:电话号码|电话|手机号|手机号码|phone)\s*(?:是|为|:|：|=)?\s*",
+                text,
+                maxsplit=1,
+            )[0]
+            text = text.rstrip("，,；;。.!！?？ \n\r\t")
+            text = text.strip("'\"`“”‘’")
+            return text or None
+
+        quoted_patterns = [
+            r"(?:图文内容|笔记内容|发布内容|内容|正文|文案|caption|content)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+            r"(?:发布|发表|生成).{0,12}(?:图文|笔记).{0,16}['\"“‘](.+?)['\"”’]",
+        ]
+        for pattern in quoted_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                content = clean(match.group(1))
+                if content:
+                    return content
+
+        label_patterns = [
+            r"(?:图文内容|笔记内容|发布内容|内容|正文|文案|caption|content)\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?(.+)$",
+            r"(?:发布|发表|生成).{0,12}(?:图文|笔记)\s*(?:内容)?\s*(?:是|为|:|：|=)\s*['\"“”‘’]?(.+)$",
+        ]
+        for pattern in label_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                content = clean(match.group(1))
+                if content:
+                    return content
+
+        return None
 
     @staticmethod
     def _extract_comment_text(task: str) -> str | None:

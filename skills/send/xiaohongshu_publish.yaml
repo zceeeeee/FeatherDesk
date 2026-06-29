@@ -1,0 +1,115 @@
+id: xiaohongshu_publish
+name: 小红书图文发布
+type: domain
+description: 检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后进入图文发布页点击文字配图，填写内容，生成图片并发布。
+version: "1.0.0"
+
+triggers:
+  - 小红书
+  - xiaohongshu
+  - xhs
+  - rednote
+  - 发布
+  - 投稿
+  - 图文
+  - 笔记
+  - 内容
+  - 文案
+  - 文字配图
+  - 生成图片
+  - 预览图片
+  - 图片编辑
+  - 下一步
+
+url_patterns:
+  - xiaohongshu.com
+  - "*.xiaohongshu.com"
+  - creator.xiaohongshu.com
+
+domain: xiaohongshu
+
+parameters:
+  content:
+    type: string
+    required: true
+    description: 要发布到小红书图文生成器的内容或文案。
+  phone_number:
+    type: string
+    required: false
+    description: 未登录时使用的手机号，例如 13574133406。
+  publish_url:
+    type: string
+    required: false
+    default: "https://creator.xiaohongshu.com/publish/publish?source=official&from=tab_switch&target=image"
+    description: 小红书创作者图文发布 URL。
+
+steps:
+  - action: goto
+    args:
+      url: "https://www.xiaohongshu.com/login"
+    comment: 进入小红书登录页，检查是否出现手机号登录。
+
+  - action: smart_fill
+    target: phone
+    value: "{{phone_number}}"
+    comment: 未登录且用户给出手机号时填写手机号。
+    on_error: continue
+
+  - action: smart_click
+    target: get_code
+    comment: 未登录时点击获取验证码，验证码由用户手动输入。
+    on_error: continue
+
+  - action: wait_for_text
+    target: about_us
+    value: 关于我们
+    comment: 等待页面左下角出现“关于我们”，确认登录成功。
+    on_error: stop
+
+  - action: goto
+    args:
+      url: "{{publish_url}}"
+    comment: 进入小红书图文发布页。
+
+  - action: smart_click
+    target: text_to_image
+    comment: 点击“文字配图”模式，再输入文本内容。
+    on_error: stop
+
+  - action: smart_fill
+    target: publish_content
+    value: "{{content}}"
+    comment: 填入用户给定的图文内容。
+    on_error: stop
+
+  - action: smart_click
+    target: generate_image
+    comment: 点击下方“生成图片”按钮。
+    on_error: stop
+
+  - action: wait
+    args:
+      seconds: 5
+    comment: 点击生成图片后等待 5 秒，再识别预览状态。
+
+  - action: wait_for_text
+    target: preview_image
+    value: 预览图片
+    comment: 等待左上方出现“预览图片”。
+    on_error: stop
+
+  - action: smart_click
+    target: next_step
+    comment: 点击左下方红色“下一步”按钮。
+    on_error: stop
+
+  - action: wait_for_text
+    target: image_edit
+    value: 图片编辑
+    comment: 等待上方出现“图片编辑”。
+    on_error: stop
+
+  - action: smart_click
+    target: final_publish
+    comment: 点击下方红色“发布”按钮。
+    on_error: stop

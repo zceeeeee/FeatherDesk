@@ -150,6 +150,14 @@ skills:
     description: "填写小红书手机号、勾选协议并获取短信验证码，验证码由用户手动输入"
     version: "1.0.0"
 
+  - id: "domain/xiaohongshu_publish"
+    name: "小红书图文发布"
+    type: "domain"
+    triggers: ["小红书", "xiaohongshu", "xhs", "rednote", "发布", "投稿", "图文", "笔记", "内容", "文案", "文字配图", "生成图片", "预览图片", "图片编辑", "下一步"]
+    url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com", "creator.xiaohongshu.com"]
+    description: "检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后进入图文发布页点击文字配图，填写内容，生成图片并发布"
+    version: "1.0.0"
+
   - id: "domain/weibo_search"
     name: "微博搜索"
     type: "domain"
@@ -292,6 +300,10 @@ sources:
 
   - id: "domain/xiaohongshu_login"
     file: "others/xiaohongshu_login.py"
+    entry: "run"
+
+  - id: "domain/xiaohongshu_publish"
+    file: "send/xiaohongshu_publish.py"
     entry: "run"
 
   - id: "domain/weibo_search"

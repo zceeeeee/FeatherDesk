@@ -51,3 +51,89 @@ locators:
       - "text=登 录"
       - "button:has-text('登录')"
       - "[role='button']:has-text('登录')"
+
+  about_us:
+    css:
+      - "text=关于我们"
+      - "a:has-text('关于我们')"
+      - "div:has-text('关于我们')"
+      - "span:has-text('关于我们')"
+    xpath:
+      - "//*[contains(normalize-space(.), '关于我们')]"
+
+  text_to_image:
+    css:
+      - "text=文字配图"
+      - "button:has-text('文字配图')"
+      - "[role='button']:has-text('文字配图')"
+      - "[role='tab']:has-text('文字配图')"
+      - "div:has-text('文字配图')"
+      - "span:has-text('文字配图')"
+    xpath:
+      - "//*[self::button or @role='button' or @role='tab' or self::div or self::span][contains(normalize-space(.), '文字配图')]"
+
+  publish_content:
+    css:
+      - "textarea[placeholder*='内容']"
+      - "textarea[placeholder*='正文']"
+      - "textarea[placeholder*='文案']"
+      - "textarea[placeholder*='笔记']"
+      - "[contenteditable='true'][data-placeholder*='内容']"
+      - "[contenteditable='true'][data-placeholder*='正文']"
+      - "[contenteditable='true']"
+      - "[role='textbox']"
+      - ".ql-editor"
+      - ".ProseMirror"
+    xpath:
+      - "//textarea[contains(@placeholder, '内容') or contains(@placeholder, '正文') or contains(@placeholder, '文案') or contains(@placeholder, '笔记')]"
+      - "//*[@contenteditable='true' or @role='textbox'][contains(@data-placeholder, '内容') or contains(@data-placeholder, '正文') or contains(@data-placeholder, '文案') or contains(@data-placeholder, '笔记')]"
+
+  generate_image:
+    css:
+      - "text=生成图片"
+      - "button:has-text('生成图片')"
+      - "[role='button']:has-text('生成图片')"
+      - "div:has-text('生成图片')"
+      - "span:has-text('生成图片')"
+    xpath:
+      - "//*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '生成图片')]"
+
+  preview_image:
+    css:
+      - "text=预览图片"
+      - "h1:has-text('预览图片')"
+      - "h2:has-text('预览图片')"
+      - "div:has-text('预览图片')"
+      - "span:has-text('预览图片')"
+    xpath:
+      - "//*[contains(normalize-space(.), '预览图片')]"
+
+  next_step:
+    css:
+      - "text=下一步"
+      - "button:has-text('下一步')"
+      - "[role='button']:has-text('下一步')"
+      - "div:has-text('下一步')"
+      - "span:has-text('下一步')"
+    xpath:
+      - "//*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '下一步')]"
+
+  image_edit:
+    css:
+      - "text=图片编辑"
+      - "h1:has-text('图片编辑')"
+      - "h2:has-text('图片编辑')"
+      - "div:has-text('图片编辑')"
+      - "span:has-text('图片编辑')"
+    xpath:
+      - "//*[contains(normalize-space(.), '图片编辑')]"
+
+  final_publish:
+    css:
+      - "text=发布"
+      - "button:has-text('发布')"
+      - "[role='button']:has-text('发布')"
+      - "div:has-text('发布')"
+      - "span:has-text('发布')"
+    xpath:
+      - "//*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '发布')]"
