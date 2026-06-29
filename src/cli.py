@@ -49,6 +49,19 @@ def _get_package_version(distribution_name: str) -> str:
         return "?"
 
 
+def _append_env_file(api_key: str, base_url: str, model: str) -> None:
+    """将 LLM 配置追加写入 .env 文件。"""
+    lines = [
+        "",
+        "# LLM Fallback (auto-saved by gui command)",
+        f"OPENAI_API_KEY={api_key}",
+        f"OPENAI_BASE_URL={base_url}",
+        f"OPENAI_MODEL={model}",
+    ]
+    with open(_ENV_FILE, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def _check_mark(ok: bool) -> str:
     return "[OK]" if ok else "[FAIL]"
 
@@ -182,7 +195,9 @@ def serve(transport: str, host: str, port: int, debug: bool) -> None:
     default=False,
     help="Keep the browser open until Enter is pressed.",
 )
-def run(task: str, max_steps: int, headless: bool, slow_mo: int, keep_open: bool) -> None:
+def run(
+    task: str, max_steps: int, headless: bool, slow_mo: int, keep_open: bool
+) -> None:
     """Execute a natural-language TASK and print the result.
 
     Launches a browser, runs the agent loop, prints output, and exits.
@@ -552,6 +567,30 @@ def gui(host: str, port: int, debug: bool) -> None:
         from dotenv import load_dotenv
 
         load_dotenv(_ENV_FILE, override=False)
+
+    # --- LLM 配置检查：缺少 API Key 时交互式引导 ---
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        click.secho("⚙  未检测到 OPENAI_API_KEY，LLM 兜底功能需要配置。", fg="yellow")
+        click.echo("   （直接回车跳过，将使用纯规则模式）\n")
+
+        api_key = click.prompt(
+            "  OPENAI_API_KEY", default="", show_default=False
+        ).strip()
+        if api_key:
+            base_url = click.prompt(
+                "  OPENAI_BASE_URL", default="https://api.openai.com/v1"
+            ).strip()
+            model = click.prompt("  OPENAI_MODEL", default="gpt-4o-mini").strip()
+
+            os.environ["OPENAI_API_KEY"] = api_key
+            os.environ["OPENAI_BASE_URL"] = base_url
+            os.environ["OPENAI_MODEL"] = model
+
+            # 追加写入 .env 方便下次使用
+            _append_env_file(api_key, base_url, model)
+            click.secho("  ✓ 配置已保存到 .env\n", fg="green")
+        else:
+            click.secho("  → 跳过，将以纯规则模式运行\n", fg="yellow")
 
     try:
         from src.gui.app import app
