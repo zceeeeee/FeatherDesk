@@ -105,14 +105,22 @@ skills:
     name: "Bilibili 搜索"
     type: "domain"
     triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "视频", "搜索", "search"]
-    url_patterns: ["bilibili.com", "search.bilibili.com"]
+    url_patterns: ["bilibili.com"]
     description: "在 Bilibili 搜索视频、番剧、用户和相关内容"
+    version: "1.0.0"
+
+  - id: "domain/xiaohongshu_search"
+    name: "小红书搜索"
+    type: "domain"
+    triggers: ["xiaohongshu", "小红书"]
+    url_patterns: ["xiaohongshu.com"]
+    description: "在 小红书搜索"
     version: "1.0.0"
 
   - id: "domain/bilibili_login"
     name: "Bilibili 短信登录"
     type: "domain"
-    triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "登录", "login", "短信登录", "验证码"]
+    triggers: ["bilibili 登录"]
     url_patterns: ["bilibili.com", "*.bilibili.com"]
     description: "打开 Bilibili 登录弹窗，切换短信登录，填写手机号并发送验证码，真人认证和验证码由用户手动完成"
     version: "1.0.0"
@@ -120,7 +128,7 @@ skills:
   - id: "domain/bilibili_publish"
     name: "Bilibili 文章投稿"
     type: "domain"
-    triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "投稿", "文章", "专栏", "正文", "标题"]
+    triggers: ["bilibili 投稿"]
     url_patterns: ["bilibili.com", "*.bilibili.com", "member.bilibili.com"]
     description: "完成 Bilibili 短信登录后进入文章投稿页，填写标题和正文并点击发布"
     version: "1.0.0"
@@ -128,7 +136,7 @@ skills:
   - id: "domain/bilibili_comment"
     name: "Bilibili 视频评论"
     type: "domain"
-    triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "评论", "留言", "回复", "讨论", "发评论", "发布评论", "视频评论", "视频留言"]
+    triggers: ["bilibili 视频留言"]
     url_patterns: ["bilibili.com", "*.bilibili.com", "bilibili.com/video/"]
     description: "完成 Bilibili 短信登录后进入视频页面，填写评论内容并点击发送"
     version: "1.0.0"
@@ -145,7 +153,7 @@ skills:
   - id: "domain/xiaohongshu_login"
     name: "小红书验证码登录"
     type: "domain"
-    triggers: ["小红书", "xiaohongshu", "xhs", "rednote", "登录", "login", "验证码"]
+    triggers: ["小红书 登录"]
     url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com"]
     description: "填写小红书手机号、勾选协议并获取短信验证码，验证码由用户手动输入"
     version: "1.0.0"
@@ -196,6 +204,22 @@ skills:
     triggers: ["豆包", "doubao", "搜索", "问答"]
     url_patterns: ["doubao.com"]
     description: "在豆包搜索"
+    version: "1.0.0"
+
+  - id: "domain/csnd_search"
+    name: "csnd搜索"
+    type: "domain"
+    triggers: ["csnd",  "搜索", "问答"]
+    url_patterns: ["csnd.com"]
+    description: "在csnd搜索"
+    version: "1.0.0"
+
+  - id: "domain/zhihu_send"
+    name: "知乎发布"
+    type: "domain"
+    triggers: ["知乎发布", "知乎 发布", "发布", "写文章", "发文章", "投稿"]
+    url_patterns: ["zhihu.com", "zhuanlan.zhihu.com"]
+    description: "在知乎发布文章"
     version: "1.0.0"
 
   # 通用交互模板
@@ -340,4 +364,16 @@ sources:
 
   - id: "domain/doubao_search"
     file: "search/doubao_search.py"
+    entry: "run"
+
+  - id: "domain/csnd_search"
+    file: "search/csnd_search.py"
+    entry: "run"
+
+  - id: "domain/xiaohongshu_search"
+    file: "search/xiaohongshu_search.py"
+    entry: "run"
+
+  - id: "domain/zhihu_send"
+    file: "send/zhihu_send.py"
     entry: "run"

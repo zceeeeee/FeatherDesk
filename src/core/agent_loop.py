@@ -668,6 +668,18 @@ class AgentLoop:
                 f"run({json.dumps(phone_number, ensure_ascii=False)})"
             )
 
+        if skill_id == "domain/zhihu_send":
+            content = self._extract_zhihu_publish_content(task)
+            if not content:
+                return (
+                    f"{source_code}\n\n"
+                    "raise ValueError('Zhihu publish requires article content')"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(content, ensure_ascii=False)})"
+            )
+
         # 提取关键词
         keyword = self._script_generator._extract_keyword(task)
         if not keyword:
@@ -848,6 +860,29 @@ class AgentLoop:
                 comment = clean(match.group(1))
                 if comment and len(comment) >= 1:
                     return comment
+        return None
+
+    @staticmethod
+    def _extract_zhihu_publish_content(task: str) -> str | None:
+        import re
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip().strip("'\"`“”‘’")
+            text = re.sub(r"[，。,.!?！？]$", "", text)
+            return text or None
+
+        patterns = [
+            r"(?:在|到)?知乎(?:上)?(?:发布|发表|发文章|写文章|投稿)\s*[:：]?\s*(.+)$",
+            r"(?:发布|发表|发文章|写文章|投稿)\s*[:：]?\s*(.+)$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                content = clean(match.group(1))
+                if content:
+                    return content
         return None
 
     @staticmethod
