@@ -92,13 +92,13 @@
     },
     {
       "id": "xiaohongshu_publish",
-      "name": "小红书图文发布",
+      "name": "小红书发布",
       "type": "domain",
-      "triggers": ["小红书", "xiaohongshu", "xhs", "rednote", "发布", "投稿", "图文", "笔记", "内容", "文案", "文字配图", "生成图片", "预览图片", "图片编辑", "下一步"],
+      "triggers": ["小红书", "xiaohongshu", "xhs", "rednote", "发布", "投稿", "图文", "笔记", "内容", "文案", "文字配图", "生成图片", "预览图片", "图片编辑", "下一步", "上传图片", "上传视频", "写长文", "写文章", "写小说", "长文", "文章", "图片地址", "视频地址", "标题", "正文", "新的创作", "一键排版"],
       "url_patterns": ["xiaohongshu.com", "*.xiaohongshu.com", "creator.xiaohongshu.com"],
       "file": "send/xiaohongshu_publish.py",
       "function": "run",
-      "description": "检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后进入图文发布页点击文字配图，填写内容，生成图片并发布"
+      "description": "小红书发布功能，支持三种模式：上传图文（文字配图/上传图片）、上传视频、写长文。自动检测用户提供的参数选择合适的模式。"
     },
     {
       "id": "login_flow",

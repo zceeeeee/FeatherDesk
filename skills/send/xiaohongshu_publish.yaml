@@ -1,25 +1,43 @@
 id: xiaohongshu_publish
-name: 小红书图文发布
+name: 小红书发布
 type: domain
-description: 检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后进入图文发布页点击文字配图，填写内容，生成图片并发布。
-version: "1.0.0"
+description: 小红书发布功能，支持三种模式：上传图文（文字配图/上传图片）、上传视频、写长文
+version: "1.1.0"
 
 triggers:
+  # Main triggers
   - 小红书
   - xiaohongshu
   - xhs
   - rednote
+  # Upload image triggers
+  - 上传图文
+  - 上传图片
+  - 图片地址
+  # Upload video triggers
+  - 上传视频
+  - 视频地址
+  # Write article triggers
+  - 写长文
+  - 写文章
+  - 写小说
+  - 长文
+  # Common triggers
   - 发布
   - 投稿
   - 图文
   - 笔记
   - 内容
   - 文案
+  - 标题
+  - 正文
   - 文字配图
   - 生成图片
   - 预览图片
   - 图片编辑
   - 下一步
+  - 新的创作
+  - 一键排版
 
 url_patterns:
   - xiaohongshu.com
@@ -31,17 +49,41 @@ domain: xiaohongshu
 parameters:
   keyword:
     type: string
-    required: true
-    description: 要发布到小红书图文生成器的内容或文案。
+    required: false
+    description: 要发布的内容或文案（用于文字配图模式）。
+  title:
+    type: string
+    required: false
+    description: 标题（可选），触发词为"标题"。
+  body:
+    type: string
+    required: false
+    description: 正文/内容（可选），触发词为"正文"或"内容"。
+  image_path:
+    type: string
+    required: false
+    description: 本地图片地址，触发词为"图片地址是"，如"D:\xxx\xxx.jpg"。
+  video_path:
+    type: string
+    required: false
+    description: 本地视频地址，触发词为"视频地址是"，如"D:\xxx\xxx.mp4"。
   phone_number:
     type: string
     required: false
     description: 未登录时使用的手机号，例如 13574133406。
+  mode:
+    type: string
+    required: false
+    description: |
+      发布模式，不指定时自动检测：
+      - text_to_image: 文字配图模式（默认，无图片/视频时）
+      - image_upload: 上传图片模式（提供图片地址时）
+      - video: 上传视频模式（提供视频地址时）
+      - article: 写长文模式（触发词包含"长文"/"文章"/"小说"时）
   publish_url:
     type: string
     required: false
-    default: "https://creator.xiaohongshu.com/publish/publish?source=official&from=tab_switch&target=image"
-    description: 小红书创作者图文发布 URL。
+    description: 小红书创作者发布 URL。
 
 steps:
   - action: goto
@@ -63,30 +105,31 @@ steps:
   - action: wait_for_text
     target: about_us
     value: 关于我们
-    comment: 等待页面左下角出现“关于我们”，确认登录成功。
+    comment: 等待页面左下角出现"关于我们"，确认登录成功。
     on_error: stop
 
   - action: wait_for_text
     target: me_button
     value: 我
-    comment: 跳转发布页前必须识别到侧边栏或底部导航的“我”，确认账号已登录。
+    comment: 跳转发布页前必须识别到侧边栏或底部导航的"我"，确认账号已登录。
     on_error: stop
 
   - action: goto
     args:
       url: "{{publish_url}}"
-    comment: 进入小红书图文发布页。
+    comment: 按模式进入图片、视频或长文发布页。
 
+  # ============== 文字配图模式 ==============
   - action: smart_click
     target: text_to_image
-    comment: 点击“文字配图”模式，再输入文本内容。
-    on_error: stop
+    comment: text_to_image 模式点击"文字配图"，填写内容后点击"生成图片"。
+    on_error: continue
 
   - action: smart_fill
     target: publish_content
     value: "{{keyword}}"
-    comment: 填入用户给定的图文内容。
-    on_error: stop
+    comment: 填写正文、图文内容或长文内容。
+    on_error: continue
 
   - action: wait
     args:
@@ -95,27 +138,51 @@ steps:
 
   - action: smart_click
     target: generate_image
-    comment: 点击下方“生成图片”按钮。
-    on_error: stop
+    comment: text_to_image 模式点击"生成图片"。
+    on_error: continue
 
-  - action: wait_for_text
-    target: preview_image
-    value: 预览图片
-    comment: 等待左上方出现“预览图片”。
-    on_error: stop
+  # ============== 上传图片模式 ==============
+  - action: smart_click
+    target: upload_image
+    comment: image_upload 模式点击"上传图片"，再上传本地图片。
+    on_error: continue
+
+  # ============== 上传视频模式 ==============
+  - action: smart_click
+    target: upload_video
+    comment: video 模式点击"上传视频"，上传本地视频后发布前等待 10 秒。
+    on_error: continue
+
+  # ============== 写长文模式 ==============
+  - action: smart_click
+    target: new_creation
+    comment: article 模式点击"新的创作"。
+    on_error: continue
+
+  - action: smart_fill
+    target: title_input
+    value: "{{title}}"
+    comment: 用户提供标题时填写；长文未提供标题时使用默认标题。
+    on_error: continue
+
+  - action: smart_fill
+    target: article_content
+    value: "{{body}}"
+    comment: 填写正文内容。
+    on_error: continue
 
   - action: smart_click
-    target: next_step
-    comment: 点击左下方红色“下一步”按钮。
-    on_error: stop
+    target: format_button
+    comment: article 模式点击"一键排版"。
+    on_error: continue
 
-  - action: wait_for_text
-    target: image_edit
-    value: 图片编辑
-    comment: 等待上方出现“图片编辑”。
-    on_error: stop
+  # ============== 通用步骤 ==============
+  - action: smart_click
+    target: next_step
+    comment: 图片预览/长文排版后点击"下一步"。
+    on_error: continue
 
   - action: smart_click
     target: final_publish
-    comment: 点击下方红色“发布”按钮。
+    comment: 点击底部红色"发布"按钮。
     on_error: stop

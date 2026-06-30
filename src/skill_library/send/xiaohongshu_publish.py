@@ -1,8 +1,16 @@
-"""Xiaohongshu image-text publishing adapter.
+"""Xiaohongshu publishing adapter.
 
-The flow checks the login page first. If the phone-login UI is visible, it
-fills the phone number, accepts the agreement, requests an SMS code, and waits
-until the page shows "About us" in the lower-left area before publishing.
+Supports three publishing modes:
+1. Image upload (上传图片) - with optional title and body
+2. Video upload (上传视频) - uploads local video, 10s delay before publish
+3. Article writing (写长文) - fills title and content, 10s delay before publish
+4. Text-to-image (文字配图) - existing mode, generates image from text
+
+Mode detection is based on user-provided parameters:
+- image_path → image_upload mode
+- video_path → video mode
+- article/long text keywords → article mode
+- default → text_to_image mode
 """
 
 try:
@@ -12,9 +20,17 @@ except Exception:
 
 
 DEFAULT_LOGIN_URL = "https://www.xiaohongshu.com/login"
-DEFAULT_PUBLISH_URL = (
+DEFAULT_IMAGE_PUBLISH_URL = (
     "https://creator.xiaohongshu.com/publish/publish"
     "?source=official&from=tab_switch&target=image"
+)
+DEFAULT_VIDEO_PUBLISH_URL = (
+    "https://creator.xiaohongshu.com/publish/publish"
+    "?source=official&from=tab_switch&target=video"
+)
+DEFAULT_ARTICLE_PUBLISH_URL = (
+    "https://creator.xiaohongshu.com/publish/publish"
+    "?source=official&from=tab_switch&target=article"
 )
 
 
@@ -71,6 +87,13 @@ def _run_js_dict(run_js_fn, code):
     if isinstance(result, dict):
         return result
     return {"success": bool(result), "result": result}
+
+
+def _optional_text(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _detect_blocked(get_url_fn, get_text_fn):
@@ -557,60 +580,7 @@ def _wait_for_me_button(run_js_fn, wait_fn, steps, max_wait_seconds, interval_se
     }
 
 
-def _set_editable(el_var, value_var):
-    return f"""
-  {{
-  const setEditable = (el, value) => {{
-    el.scrollIntoView({{block: 'center', inline: 'center'}});
-    el.focus();
-    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {{
-      const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
-      if (descriptor && descriptor.set) {{
-        descriptor.set.call(el, value);
-      }} else {{
-        el.value = value;
-      }}
-    }} else {{
-      const escapeHtml = (text) => String(text)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-      el.innerHTML = String(value).split('\\n').map((line) => escapeHtml(line) || '<br>').join('<br>');
-    }}
-    const dispatchEditableEvents = (target) => {{
-      try {{
-        target.dispatchEvent(new InputEvent('beforeinput', {{
-          bubbles: true,
-          cancelable: true,
-          inputType: 'insertText',
-          data: value
-        }}));
-      }} catch (error) {{}}
-      try {{
-        target.dispatchEvent(new InputEvent('input', {{
-          bubbles: true,
-          cancelable: true,
-          inputType: 'insertText',
-          data: value
-        }}));
-      }} catch (error) {{
-        target.dispatchEvent(new Event('input', {{bubbles: true}}));
-      }}
-      target.dispatchEvent(new Event('change', {{bubbles: true}}));
-      target.dispatchEvent(new Event('blur', {{bubbles: true}}));
-    }};
-    const eventTargets = [el];
-    const editableParent = el.closest('[contenteditable="true"],[role="textbox"],.ql-editor,.ProseMirror,[class*="editor" i]');
-    if (editableParent && editableParent !== el) {{
-      eventTargets.push(editableParent);
-    }}
-    eventTargets.forEach(dispatchEditableEvents);
-  }};
-  setEditable({el_var}, {value_var});
-  }}
-"""
-
+# ==================== Text-to-Image Mode Functions ====================
 
 def _click_text_to_image(run_js_fn):
     return _run_js_dict(
@@ -666,6 +636,61 @@ def _click_text_to_image(run_js_fn):
 })()
 """,
     )
+
+
+def _set_editable(el_var, value_var):
+    return f"""
+  {{
+  const setEditable = (el, value) => {{
+    el.scrollIntoView({{block: 'center', inline: 'center'}});
+    el.focus();
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {{
+      const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (descriptor && descriptor.set) {{
+        descriptor.set.call(el, value);
+      }} else {{
+        el.value = value;
+      }}
+    }} else {{
+      const escapeHtml = (text) => String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      el.innerHTML = String(value).split('\\n').map((line) => escapeHtml(line) || '<br>').join('<br>');
+    }}
+    const dispatchEditableEvents = (target) => {{
+      try {{
+        target.dispatchEvent(new InputEvent('beforeinput', {{
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: value
+        }}));
+      }} catch (error) {{}}
+      try {{
+        target.dispatchEvent(new InputEvent('input', {{
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: value
+        }}));
+      }} catch (error) {{
+        target.dispatchEvent(new Event('input', {{bubbles: true}}));
+      }}
+      target.dispatchEvent(new Event('change', {{bubbles: true}}));
+      target.dispatchEvent(new Event('blur', {{bubbles: true}}));
+    }};
+    const eventTargets = [el];
+    const editableParent = el.closest('[contenteditable="true"],[role="textbox"],.ql-editor,.ProseMirror,[class*="editor" i]');
+    if (editableParent && editableParent !== el) {{
+      eventTargets.push(editableParent);
+    }}
+    eventTargets.forEach(dispatchEditableEvents);
+  }};
+  setEditable({el_var}, {value_var});
+  }}
+"""
 
 
 def _fill_publish_content(run_js_fn, content):
@@ -838,6 +863,449 @@ def _detect_preview_image(run_js_fn):
     )
 
 
+# ==================== Upload Image Mode Functions ====================
+
+def _click_upload_image(run_js_fn):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const UPLOAD_IMAGE_TEXT = '\\u4e0a\\u4f20\\u56fe\\u7247';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
+  const nodes = Array.from(document.querySelectorAll('button,[role="button"],a,div,span'))
+    .filter(visible).map((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = compactText(el);
+      const clickable = Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON';
+      const uploadButton = el.className && /upload.button/i.test(String(el.className));
+      const redButton = el.className && /bg.red|red.*button/i.test(String(el.className));
+      return {el, rect, text, clickable, uploadButton, redButton};
+    }).filter((item) => {
+      if (!item.text.includes(UPLOAD_IMAGE_TEXT)) return false;
+      return item.text === UPLOAD_IMAGE_TEXT || item.text.length <= 20 || item.clickable;
+    });
+  if (!nodes.length) {
+    return {success: false, error: 'Upload image button not found'};
+  }
+  nodes.sort((a, b) => {
+    const score = (item) => {
+      let value = item.rect.width * item.rect.height / 1000;
+      if (item.text === UPLOAD_IMAGE_TEXT) value -= 500;
+      if (item.uploadButton) value -= 300;
+      if (item.redButton) value -= 200;
+      if (item.clickable) value -= 100;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const target = nodes[0].el.closest('button,[role="button"],a') || nodes[0].el;
+  if (target.disabled || target.getAttribute('aria-disabled') === 'true') {
+    return {success: false, error: 'Upload image button is disabled', text: nodes[0].text};
+  }
+  target.scrollIntoView({block: 'center', inline: 'center'});
+  target.click();
+  return {
+    success: true,
+    text: nodes[0].text,
+    method: 'upload_image_button'
+  };
+})()
+""",
+    )
+
+
+def _resolve_upload_file(upload_file_fn):
+    if upload_file_fn is not None:
+        return upload_file_fn
+    if _controls is not None and hasattr(_controls, "upload_file"):
+        return _controls.upload_file
+    try:
+        return upload_file
+    except Exception:
+        return None
+
+
+def _upload_local_file(upload_file_fn, file_path):
+    if upload_file_fn is None:
+        return {"success": False, "error": "File upload control is not available"}
+
+    selectors = [
+        'input[type="file"][accept*="image"]',
+        'input[type="file"]',
+    ]
+
+    last_result = {"success": False, "error": "File input not attempted"}
+    for selector in selectors:
+        result = _safe_call(
+            upload_file_fn,
+            {"success": False, "error": "upload_file failed"},
+            selector,
+            file_path,
+        )
+        if not isinstance(result, dict):
+            result = {"success": bool(result), "result": result}
+        result.setdefault("selector", selector)
+        if result.get("success"):
+            return result
+        last_result = result
+    return last_result
+
+
+# ==================== Upload Video Mode Functions ====================
+
+def _click_upload_video(run_js_fn):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const UPLOAD_VIDEO_TEXT = '\\u4e0a\\u4f20\\u89c6\\u9891';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
+  const nodes = Array.from(document.querySelectorAll('button,[role="button"],a,div,span'))
+    .filter(visible).map((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = compactText(el);
+      const clickable = Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON';
+      const uploadButton = el.className && /upload.button/i.test(String(el.className));
+      const redButton = el.className && /bg.red|red.*button/i.test(String(el.className));
+      return {el, rect, text, clickable, uploadButton, redButton};
+    }).filter((item) => {
+      if (!item.text.includes(UPLOAD_VIDEO_TEXT)) return false;
+      return item.text === UPLOAD_VIDEO_TEXT || item.text.length <= 20 || item.clickable;
+    });
+  if (!nodes.length) {
+    return {success: false, error: 'Upload video button not found'};
+  }
+  nodes.sort((a, b) => {
+    const score = (item) => {
+      let value = item.rect.width * item.rect.height / 1000;
+      if (item.text === UPLOAD_VIDEO_TEXT) value -= 500;
+      if (item.uploadButton) value -= 300;
+      if (item.redButton) value -= 200;
+      if (item.clickable) value -= 100;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const target = nodes[0].el.closest('button,[role="button"],a') || nodes[0].el;
+  if (target.disabled || target.getAttribute('aria-disabled') === 'true') {
+    return {success: false, error: 'Upload video button is disabled', text: nodes[0].text};
+  }
+  target.scrollIntoView({block: 'center', inline: 'center'});
+  target.click();
+  return {
+    success: true,
+    text: nodes[0].text,
+    method: 'upload_video_button'
+  };
+})()
+""",
+    )
+
+
+def _upload_video_file(upload_file_fn, file_path):
+    if upload_file_fn is None:
+        return {"success": False, "error": "File upload control is not available"}
+
+    selectors = [
+        'input[type="file"][accept*="video"]',
+        'input[type="file"]',
+    ]
+
+    last_result = {"success": False, "error": "File input not attempted"}
+    for selector in selectors:
+        result = _safe_call(
+            upload_file_fn,
+            {"success": False, "error": "upload_file failed"},
+            selector,
+            file_path,
+        )
+        if not isinstance(result, dict):
+            result = {"success": bool(result), "result": result}
+        result.setdefault("selector", selector)
+        if result.get("success"):
+            return result
+        last_result = result
+    return last_result
+
+
+# ==================== Article/Long-form Writing Mode Functions ====================
+
+def _click_new_creation(run_js_fn):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const NEW_CREATION_TEXT = '\\u65b0\\u7684\\u521b\\u4f5c';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
+  const nodes = Array.from(document.querySelectorAll('button,[role="button"],a,div,span'))
+    .filter(visible).map((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = compactText(el);
+      const clickable = Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON';
+      return {el, rect, text, clickable};
+    }).filter((item) => {
+      if (!item.text.includes(NEW_CREATION_TEXT)) return false;
+      return item.text.includes(NEW_CREATION_TEXT) && item.text.length <= 30;
+    });
+  if (!nodes.length) {
+    return {success: false, error: 'New creation button not found'};
+  }
+  nodes.sort((a, b) => {
+    const score = (item) => {
+      let value = item.rect.width * item.rect.height / 1000;
+      if (item.text === NEW_CREATION_TEXT) value -= 500;
+      if (item.clickable) value -= 100;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const target = nodes[0].el.closest('button,[role="button"],a') || nodes[0].el;
+  if (target.disabled || target.getAttribute('aria-disabled') === 'true') {
+    return {success: false, error: 'New creation button is disabled', text: nodes[0].text};
+  }
+  target.scrollIntoView({block: 'center', inline: 'center'});
+  target.click();
+  return {
+    success: true,
+    text: nodes[0].text,
+    method: 'new_creation_button'
+  };
+})()
+""",
+    )
+
+
+def _fill_title(run_js_fn, title):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const title = TITLE_TEXT;
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const labelOf = (el) => [
+    el.placeholder || '',
+    el.getAttribute('aria-label') || '',
+    el.getAttribute('data-placeholder') || '',
+    el.getAttribute('title') || '',
+    el.name || '',
+    el.id || '',
+    String(el.className || '')
+  ].join(' ').toLowerCase();
+  const denied = (text) => /(\\u641c\\u7d22|search|\\u9a8c\\u8bc1\\u7801|code|\\u5bc6\\u7801|password|\\u624b\\u673a|phone|mobile|login)/i.test(text);
+  const titleLabel = (text) => /(\\u6807\\u9898|title|\\u8f93\\u5165\\u6807\\u9898)/i.test(text);
+  const candidates = Array.from(document.querySelectorAll('textarea,input,[contenteditable="true"]'))
+    .filter(visible).map((el) => {
+      const rect = el.getBoundingClientRect();
+      const label = labelOf(el);
+      return {el, rect, label};
+    }).filter((item) => {
+      const text = item.label;
+      if (denied(text)) return false;
+      const type = (item.el.type || '').toLowerCase();
+      if (item.el.tagName === 'INPUT' && type && !['text', 'search'].includes(type)) return false;
+      return titleLabel(text) ||
+        item.el.tagName === 'TEXTAREA' ||
+        (item.el.getAttribute('placeholder') || '').includes('\\u6807\\u9898') ||
+        (item.el.getAttribute('placeholder') || '').includes('title');
+    });
+  if (!candidates.length) {
+    return {success: false, error: 'Title input not found'};
+  }
+  candidates.sort((a, b) => {
+    const score = (item) => {
+      let value = 0;
+      if (item.el.tagName === 'TEXTAREA') value -= 350;
+      if (item.el.isContentEditable) value -= 260;
+      if (titleLabel(item.label)) value -= 500;
+      value -= Math.min(item.rect.height, 120) / 4;
+      value += item.rect.top / 80;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const target = candidates[0].el;
+  target.scrollIntoView({block: 'center', inline: 'center'});
+  target.focus();
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+    const proto = target.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (descriptor && descriptor.set) {
+      descriptor.set.call(target, title);
+    } else {
+      target.value = title;
+    }
+    target.dispatchEvent(new Event('input', {bubbles: true}));
+    target.dispatchEvent(new Event('change', {bubbles: true}));
+  } else {
+    target.innerHTML = title;
+    target.dispatchEvent(new Event('input', {bubbles: true}));
+    target.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  const value = target.value || target.innerText || target.textContent || '';
+  return {
+    success: value.includes(title.split('\\n')[0]),
+    title_value: value,
+    selector: target.placeholder || target.getAttribute('data-placeholder') || target.className || target.id || target.tagName
+  };
+})()
+""".replace("TITLE_TEXT", _js_string(title)),
+    )
+
+
+def _fill_article_content(run_js_fn, content):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const content = CONTENT_TEXT;
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const labelOf = (el) => [
+    el.placeholder || '',
+    el.getAttribute('aria-label') || '',
+    el.getAttribute('data-placeholder') || '',
+    el.getAttribute('title') || '',
+    el.name || '',
+    el.id || '',
+    String(el.className || '')
+  ].join(' ').toLowerCase();
+  const denied = (text) => /(\\u641c\\u7d22|search|\\u9a8c\\u8bc1\\u7801|code|\\u5bc6\\u7801|password|\\u624b\\u673a|phone|mobile|login|\\u6807\\u7b7e|tag|\\u8bdd\\u9898|topic)/i.test(text);
+  const goodLabel = (text) => /(\\u5185\\u5bb9|\\u6b63\\u6587|\\u6587\\u6848|\\u7b14\\u8bb0|\\u63cf\\u8ff0|\\u8bf4\\u70b9|\\u8f93\\u5165|\\u751f\\u6210|prompt|content|caption|description|editor|\\u8f93\\u5165\\u6587\\u5b57)/i.test(text);
+  const candidates = Array.from(document.querySelectorAll(
+    '[contenteditable="true"],[role="textbox"],.ProseMirror,.ql-editor,.tiptap'
+  )).filter(visible).map((el) => {
+    const rect = el.getBoundingClientRect();
+    const label = labelOf(el);
+    const nearText = (el.parentElement ? (el.parentElement.innerText || el.parentElement.textContent || '') : '').trim().replace(/\\s+/g, '');
+    return {el, rect, label, nearText};
+  }).filter((item) => {
+    const text = `${item.label} ${item.nearText}`;
+    if (denied(text)) return false;
+    const isTiptap = item.el.className && /tiptap|ProseMirror/i.test(String(item.el.className));
+    return isTiptap || item.el.isContentEditable || goodLabel(text);
+  });
+  if (!candidates.length) {
+    return {success: false, error: 'Article content editor (.tiptap ProseMirror) not found'};
+  }
+  candidates.sort((a, b) => {
+    const score = (item) => {
+      let value = 0;
+      const isTiptap = item.el.className && /tiptap|ProseMirror/i.test(String(item.el.className));
+      if (isTiptap) value -= 1000;
+      if (item.el.isContentEditable) value -= 260;
+      if (goodLabel(item.label)) value -= 500;
+      value -= Math.min(item.rect.height, 420) / 4;
+      value += item.rect.top / 80;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const target = candidates[0].el;
+  const editor = target.closest('.ProseMirror,.tiptap,[contenteditable="true"]') || target;
+  editor.scrollIntoView({block: 'center', inline: 'center'});
+  editor.focus();
+  editor.innerHTML = '';
+  const escapeHtml = (text) => String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const paragraphs = String(content).split('\\n').filter(line => line.trim());
+  if (paragraphs.length > 0) {
+    editor.innerHTML = paragraphs.map(line => `<p>${escapeHtml(line)}</p>`).join('');
+  } else {
+    editor.innerHTML = `<p>${escapeHtml(content)}</p>`;
+  }
+  editor.dispatchEvent(new Event('input', {bubbles: true}));
+  editor.dispatchEvent(new Event('change', {bubbles: true}));
+  editor.dispatchEvent(new Event('blur', {bubbles: true}));
+  const value = target.innerText || target.textContent || '';
+  return {
+    success: value.includes(String(content).split('\\n')[0]),
+    content_value: value,
+    selector: target.className || target.id || target.tagName
+  };
+})()
+"""
+        .replace("CONTENT_TEXT", _js_string(content)),
+    )
+
+
+def _click_format_button(run_js_fn):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const FORMAT_TEXT = '\\u4e00\\u952e\\u6392\\u7248';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
+  const nodes = Array.from(document.querySelectorAll('button,[role="button"],a,div,span'))
+    .filter(visible).map((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = compactText(el);
+      const clickable = Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON';
+      const nextBtnText = el.className && /next.btn.text/i.test(String(el.className));
+      return {el, rect, text, clickable, nextBtnText};
+    }).filter((item) => {
+      if (!item.text.includes(FORMAT_TEXT)) return false;
+      return item.text.includes(FORMAT_TEXT) && item.text.length <= 20;
+    });
+  if (!nodes.length) {
+    return {success: false, error: 'Format button not found'};
+  }
+  nodes.sort((a, b) => {
+    const score = (item) => {
+      let value = item.rect.width * item.rect.height / 1000;
+      if (item.text === FORMAT_TEXT) value -= 500;
+      if (item.nextBtnText) value -= 300;
+      if (item.clickable) value -= 100;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const target = nodes[0].el.closest('button,[role="button"],a') || nodes[0].el;
+  if (target.disabled || target.getAttribute('aria-disabled') === 'true') {
+    return {success: false, error: 'Format button is disabled', text: nodes[0].text};
+  }
+  target.scrollIntoView({block: 'center', inline: 'center'});
+  target.click();
+  return {
+    success: true,
+    text: nodes[0].text,
+    method: 'format_button'
+  };
+})()
+""",
+    )
+
+
+# ==================== Common Functions ====================
+
 def _click_next_step(run_js_fn):
     return _run_js_dict(
         run_js_fn,
@@ -858,10 +1326,11 @@ def _click_next_step(run_js_fn):
       const lowerLeft = rect.top > window.innerHeight * 0.45 &&
         rect.left < Math.max(520, window.innerWidth * 0.55);
       const clickable = Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON';
+      const submit = el.className && /submit|d.button.large/i.test(String(el.className));
       const red = /rgb\\(\\s*(220|230|240|250|255)\\s*,\\s*(0|20|30|40|50|60|70|80|90)\\s*,\\s*(40|50|60|70|80|90|100|110|120)\\s*\\)|#?ff2442|#?fe2c55/i.test(
         `${style.backgroundColor} ${style.color} ${style.borderColor}`
       );
-      return {el, rect, text, lowerLeft, clickable, red};
+      return {el, rect, text, lowerLeft, clickable, submit, red};
     }).filter((item) => {
       if (!item.text.includes(NEXT_STEP_TEXT)) return false;
       return item.text === NEXT_STEP_TEXT || item.text.length <= 16 || item.clickable;
@@ -874,6 +1343,7 @@ def _click_next_step(run_js_fn):
       let value = item.rect.width * item.rect.height / 1000;
       if (item.text === NEXT_STEP_TEXT) value -= 500;
       if (item.lowerLeft) value -= 220;
+      if (item.submit) value -= 180;
       if (item.red) value -= 160;
       if (item.clickable) value -= 100;
       return value;
@@ -1132,12 +1602,99 @@ def _resolve_mouse_click(mouse_click_fn):
         return None
 
 
+def _resolve_upload_file_fn(upload_file_fn):
+    if upload_file_fn is not None:
+        return upload_file_fn
+    if _controls is not None and hasattr(_controls, "upload_file"):
+        return _controls.upload_file
+    try:
+        return upload_file
+    except Exception:
+        return None
+
+
+def _normalize_publish_mode(mode, image_path, video_path, publish_url):
+    text = str(mode or "").strip().lower()
+    url = str(publish_url or "").lower()
+    # Explicit mode takes highest priority
+    if "article" in text or "long" in text or "novel" in text:
+        return "article"
+    if "video" in text:
+        return "video"
+    if "upload" in text or "image_upload" in text:
+        return "image_upload"
+    # Then check for file paths
+    if video_path:
+        return "video"
+    if image_path:
+        return "image_upload"
+    # Then check URL patterns
+    if "target=article" in url:
+        return "article"
+    if "target=video" in url:
+        return "video"
+    # Default URL contains target=image, but that's for text_to_image, not upload
+    # text_to_image is the default mode
+    return "text_to_image"
+
+
+def _publish_url_for_mode(mode, publish_url):
+    if publish_url and publish_url != DEFAULT_IMAGE_PUBLISH_URL:
+        return publish_url
+    if mode == "article":
+        return DEFAULT_ARTICLE_PUBLISH_URL
+    if mode == "video":
+        return DEFAULT_VIDEO_PUBLISH_URL
+    return DEFAULT_IMAGE_PUBLISH_URL
+
+
+def _fill_optional_publish_fields(run_js_fn, wait_fn, steps, title, body):
+    if title:
+        title_result = _retry(
+            "fill_title",
+            lambda: _fill_title(run_js_fn, title),
+            steps,
+            wait_fn,
+            attempts=5,
+            interval=1,
+        )
+        if not title_result.get("success"):
+            return {
+                "success": False,
+                "error": "Failed to fill Xiaohongshu publish title",
+                "result": title_result,
+            }
+
+    if body:
+        body_result = _retry(
+            "fill_publish_content",
+            lambda: _fill_publish_content(run_js_fn, body),
+            steps,
+            wait_fn,
+            attempts=5,
+            interval=1,
+        )
+        if not body_result.get("success"):
+            return {
+                "success": False,
+                "error": "Failed to fill Xiaohongshu publish content",
+                "result": body_result,
+            }
+
+    return {"success": True}
+
+
 def run(
-    keyword,
+    keyword=None,
     phone_number=None,
     *,
+    title=None,
+    body=None,
+    image_path=None,
+    video_path=None,
+    mode=None,
     login_url=DEFAULT_LOGIN_URL,
-    publish_url=DEFAULT_PUBLISH_URL,
+    publish_url=DEFAULT_IMAGE_PUBLISH_URL,
     max_wait_seconds=300,
     wait_seconds=1,
     goto_fn=None,
@@ -1146,9 +1703,35 @@ def run(
     get_url_fn=None,
     get_text_fn=None,
     mouse_click_fn=None,
+    upload_file_fn=None,
     log_fn=None,
 ):
-    """Log in to Xiaohongshu if needed, fill image-text content, and generate."""
+    """Publish to Xiaohongshu with support for multiple modes.
+
+    Args:
+        keyword: Content for text-to-image mode.
+        phone_number: Phone number for login (optional if already logged in).
+        title: Optional title for image/video/article mode.
+        body: Optional body/content for image/video/article mode.
+        image_path: Local image path for image_upload mode.
+        video_path: Local video path for video mode.
+        mode: Force a specific mode (text_to_image, image_upload, video, article).
+        login_url: Login page URL.
+        publish_url: Override publish URL.
+        max_wait_seconds: Max wait time for login.
+        wait_seconds: Initial wait after navigation.
+        goto_fn: Custom navigation function.
+        run_js_fn: Custom JS execution function.
+        wait_fn: Custom wait function.
+        get_url_fn: Custom get URL function.
+        get_text_fn: Custom get text function.
+        mouse_click_fn: Custom mouse click function.
+        upload_file_fn: Custom file upload function.
+        log_fn: Custom logging function.
+
+    Returns:
+        Dict with success status and steps.
+    """
     if goto_fn is None:
         goto_fn = _controls.goto if _controls is not None else goto
     if run_js_fn is None:
@@ -1160,14 +1743,26 @@ def run(
     if get_text_fn is None:
         get_text_fn = _controls.get_page_text if _controls is not None else get_text
     mouse_click_fn = _resolve_mouse_click(mouse_click_fn)
+    upload_file_fn = _resolve_upload_file_fn(upload_file_fn)
 
     log_fn = _resolve_log(log_fn)
     steps = []
 
     try:
-        publish_content = str(keyword).strip()
-        if not publish_content:
-            raise ValueError("Xiaohongshu publish requires content")
+        requested_mode = _normalize_publish_mode(mode, image_path, video_path, publish_url)
+        publish_url = _publish_url_for_mode(requested_mode, publish_url)
+        publish_content = _optional_text(body)
+        if publish_content is None:
+            publish_content = _optional_text(keyword)
+
+        if requested_mode == "text_to_image" and not publish_content:
+            raise ValueError("Xiaohongshu text-to-image publish requires content (keyword or body)")
+        if requested_mode == "article" and not publish_content:
+            raise ValueError("Xiaohongshu article publish requires content (body)")
+        if requested_mode == "image_upload" and not _optional_text(image_path):
+            raise ValueError("Xiaohongshu image upload requires image_path")
+        if requested_mode == "video" and not _optional_text(video_path):
+            raise ValueError("Xiaohongshu video upload requires video_path")
 
         steps.append({"step": "navigate_login", "result": goto_fn(login_url)})
         if wait_seconds:
@@ -1184,59 +1779,52 @@ def run(
 
         phone = None
         if not login_state.get("logged_in"):
-            if not phone_number:
-                return {
-                    "success": False,
-                    "requires_phone_number": True,
-                    "error": "Xiaohongshu publish requires phone number when not logged in",
-                    "steps": steps,
-                }
+            if phone_number:
+                phone = _normalize_phone_number(phone_number)
 
-            phone = _normalize_phone_number(phone_number)
+                fill_result = _fill_phone(run_js_fn, phone)
+                steps.append({"step": "fill_phone", "result": fill_result})
+                if not fill_result.get("success"):
+                    return {
+                        "success": False,
+                        "error": "Failed to fill Xiaohongshu phone number",
+                        "steps": steps,
+                    }
 
-            fill_result = _fill_phone(run_js_fn, phone)
-            steps.append({"step": "fill_phone", "result": fill_result})
-            if not fill_result.get("success"):
-                return {
-                    "success": False,
-                    "error": "Failed to fill Xiaohongshu phone number",
-                    "steps": steps,
-                }
+                agreement_result = _accept_agreement(run_js_fn)
+                steps.append({"step": "accept_agreement", "result": agreement_result})
+                if not agreement_result.get("success"):
+                    return {
+                        "success": False,
+                        "error": "Failed to accept Xiaohongshu agreement",
+                        "steps": steps,
+                    }
 
-            agreement_result = _accept_agreement(run_js_fn)
-            steps.append({"step": "accept_agreement", "result": agreement_result})
-            if not agreement_result.get("success"):
-                return {
-                    "success": False,
-                    "error": "Failed to accept Xiaohongshu agreement",
-                    "steps": steps,
-                }
+                get_code_result = _click_get_code(run_js_fn)
+                steps.append({"step": "click_get_code", "result": get_code_result})
+                if not get_code_result.get("success"):
+                    return {
+                        "success": False,
+                        "error": "Failed to request Xiaohongshu verification code",
+                        "steps": steps,
+                    }
 
-            get_code_result = _click_get_code(run_js_fn)
-            steps.append({"step": "click_get_code", "result": get_code_result})
-            if not get_code_result.get("success"):
-                return {
-                    "success": False,
-                    "error": "Failed to request Xiaohongshu verification code",
-                    "steps": steps,
-                }
-
-            log_fn("Please enter the Xiaohongshu SMS verification code in the browser.")
-            wait_result = _wait_for_about_us(
-                run_js_fn,
-                wait_fn,
-                steps,
-                max_wait_seconds=max_wait_seconds,
-                interval_seconds=2,
-            )
-            steps.append({"step": "manual_login_completion", "result": wait_result})
-            if not wait_result.get("success"):
-                return {
-                    "success": False,
-                    "requires_manual_login": True,
-                    "error": "Please complete Xiaohongshu login before publishing",
-                    "steps": steps,
-                }
+                log_fn("Please enter the Xiaohongshu SMS verification code in the browser.")
+                wait_result = _wait_for_about_us(
+                    run_js_fn,
+                    wait_fn,
+                    steps,
+                    max_wait_seconds=max_wait_seconds,
+                    interval_seconds=2,
+                )
+                steps.append({"step": "manual_login_completion", "result": wait_result})
+                if not wait_result.get("success"):
+                    return {
+                        "success": False,
+                        "requires_manual_login": True,
+                        "error": "Please complete Xiaohongshu login before publishing",
+                        "steps": steps,
+                    }
 
         me_result = _wait_for_me_button(
             run_js_fn,
@@ -1257,100 +1845,280 @@ def run(
         steps.append({"step": "navigate_publish_editor", "result": goto_fn(publish_url)})
         steps.append({"step": "wait_after_publish_navigation", "result": _safe_call(wait_fn, "", 2)})
 
-        text_to_image_result = _retry(
-            "click_text_to_image",
-            lambda: _click_text_to_image(run_js_fn),
-            steps,
-            wait_fn,
-            attempts=5,
-            interval=1,
-        )
-        if not text_to_image_result.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to click Xiaohongshu text-to-image mode",
-                "steps": steps,
-            }
-        steps.append({"step": "wait_after_text_to_image", "result": _safe_call(wait_fn, "", 1)})
+        if requested_mode == "article":
+            # Article mode: click "新的创作", fill title and content
+            new_creation_result = _retry(
+                "click_new_creation",
+                lambda: _click_new_creation(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not new_creation_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu new creation button",
+                    "steps": steps,
+                }
+            steps.append({"step": "wait_after_new_creation", "result": _safe_call(wait_fn, "", 1)})
 
-        fill_publish_result = _retry(
-            "fill_publish_content",
-            lambda: _fill_publish_content(run_js_fn, publish_content),
-            steps,
-            wait_fn,
-            attempts=5,
-            interval=1,
-        )
-        if not fill_publish_result.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to fill Xiaohongshu publish content",
-                "steps": steps,
-            }
-        steps.append(
-            {"step": "wait_after_fill_publish_content", "result": _safe_call(wait_fn, "", 2)}
-        )
+            # Fill title (optional, default if not provided)
+            article_title = _optional_text(title) or "用户未定义标题"
+            title_result = _retry(
+                "fill_article_title",
+                lambda: _fill_title(run_js_fn, article_title),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not title_result.get("success"):
+                log_fn("Warning: Failed to fill article title, continuing anyway")
 
-        generate_result = _retry(
-            "click_generate_image",
-            lambda: _click_generate_image(run_js_fn),
-            steps,
-            wait_fn,
-            attempts=5,
-            interval=1,
-        )
-        if not generate_result.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to click Xiaohongshu generate-image button",
-                "steps": steps,
-            }
+            # Fill content
+            if publish_content:
+                content_result = _retry(
+                    "fill_article_content",
+                    lambda: _fill_article_content(run_js_fn, publish_content),
+                    steps,
+                    wait_fn,
+                    attempts=5,
+                    interval=1,
+                )
+                if not content_result.get("success"):
+                    log_fn("Warning: Failed to fill article content, continuing anyway")
+                steps.append({"step": "wait_after_fill_article_content", "result": _safe_call(wait_fn, "", 1)})
 
-        preview_result = _retry(
-            "detect_preview_image",
-            lambda: _detect_preview_image(run_js_fn),
-            steps,
-            wait_fn,
-            attempts=60,
-            interval=1,
-        )
-        if not preview_result.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to detect Xiaohongshu preview image screen",
-                "steps": steps,
-            }
+            # Click format button
+            format_result = _retry(
+                "click_format_button",
+                lambda: _click_format_button(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not format_result.get("success"):
+                log_fn("Warning: Failed to click format button, continuing anyway")
+            steps.append({"step": "wait_after_format", "result": _safe_call(wait_fn, "", 1)})
 
-        next_result = _retry(
-            "click_next_step",
-            lambda: _click_next_step(run_js_fn),
-            steps,
-            wait_fn,
-            attempts=5,
-            interval=1,
-        )
-        if not next_result.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to click Xiaohongshu next-step button",
-                "steps": steps,
-            }
-        steps.append({"step": "wait_after_next_step", "result": _safe_call(wait_fn, "", 1)})
+            # Click next step
+            next_result = _retry(
+                "click_next_step",
+                lambda: _click_next_step(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not next_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu next-step button",
+                    "steps": steps,
+                }
 
-        image_edit_result = _retry(
-            "detect_image_edit",
-            lambda: _detect_image_edit(run_js_fn),
-            steps,
-            wait_fn,
-            attempts=30,
-            interval=1,
-        )
-        if not image_edit_result.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to detect Xiaohongshu image edit screen",
-                "steps": steps,
-            }
+            # 10 second delay before publish for article mode
+            steps.append({"step": "wait_before_publish_article", "result": _safe_call(wait_fn, "", 10)})
+
+        elif requested_mode == "image_upload":
+            # Image upload mode: click "上传图片", upload local file
+            upload_image_result = _retry(
+                "click_upload_image",
+                lambda: _click_upload_image(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not upload_image_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu upload image button",
+                    "steps": steps,
+                }
+            steps.append({"step": "wait_after_upload_image_click", "result": _safe_call(wait_fn, "", 1)})
+
+            # Upload local image file
+            if image_path:
+                upload_result = _upload_local_file(upload_file_fn, image_path)
+                steps.append({"step": "upload_local_image", "result": upload_result})
+                if not upload_result.get("success"):
+                    log_fn("Warning: Failed to upload local image, file dialog may be needed")
+
+            # Fill optional title and body
+            if title or body:
+                fields_result = _fill_optional_publish_fields(run_js_fn, wait_fn, steps, title, body)
+                if not fields_result.get("success"):
+                    log_fn("Warning: Failed to fill optional fields, continuing anyway")
+
+            # Wait for upload to complete, then click next step
+            steps.append({"step": "wait_after_image_upload", "result": _safe_call(wait_fn, "", 2)})
+
+            next_result = _retry(
+                "click_next_step",
+                lambda: _click_next_step(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not next_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu next-step button",
+                    "steps": steps,
+                }
+
+        elif requested_mode == "video":
+            # Video upload mode: click "上传视频", upload local file
+            upload_video_result = _retry(
+                "click_upload_video",
+                lambda: _click_upload_video(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not upload_video_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu upload video button",
+                    "steps": steps,
+                }
+            steps.append({"step": "wait_after_upload_video_click", "result": _safe_call(wait_fn, "", 1)})
+
+            # Upload local video file
+            if video_path:
+                upload_result = _upload_video_file(upload_file_fn, video_path)
+                steps.append({"step": "upload_local_video", "result": upload_result})
+                if not upload_result.get("success"):
+                    log_fn("Warning: Failed to upload local video, file dialog may be needed")
+
+            # Fill optional title and body
+            if title or body:
+                fields_result = _fill_optional_publish_fields(run_js_fn, wait_fn, steps, title, body)
+                if not fields_result.get("success"):
+                    log_fn("Warning: Failed to fill optional fields, continuing anyway")
+
+            # Wait for video upload (10 seconds)
+            steps.append({"step": "wait_for_video_upload", "result": _safe_call(wait_fn, "", 10)})
+
+            next_result = _retry(
+                "click_next_step",
+                lambda: _click_next_step(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not next_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu next-step button",
+                    "steps": steps,
+                }
+
+            # 10 second delay before publish for video mode
+            steps.append({"step": "wait_before_publish_video", "result": _safe_call(wait_fn, "", 10)})
+
+        else:
+            # Text-to-image mode: original implementation
+            text_to_image_result = _retry(
+                "click_text_to_image",
+                lambda: _click_text_to_image(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not text_to_image_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu text-to-image mode",
+                    "steps": steps,
+                }
+            steps.append({"step": "wait_after_text_to_image", "result": _safe_call(wait_fn, "", 1)})
+
+            fill_publish_result = _retry(
+                "fill_publish_content",
+                lambda: _fill_publish_content(run_js_fn, publish_content),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not fill_publish_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to fill Xiaohongshu publish content",
+                    "steps": steps,
+                }
+            steps.append(
+                {"step": "wait_after_fill_publish_content", "result": _safe_call(wait_fn, "", 2)}
+            )
+
+            generate_result = _retry(
+                "click_generate_image",
+                lambda: _click_generate_image(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not generate_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu generate-image button",
+                    "steps": steps,
+                }
+
+            preview_result = _retry(
+                "detect_preview_image",
+                lambda: _detect_preview_image(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=60,
+                interval=1,
+            )
+            if not preview_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to detect Xiaohongshu preview image screen",
+                    "steps": steps,
+                }
+
+            next_result = _retry(
+                "click_next_step",
+                lambda: _click_next_step(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not next_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to click Xiaohongshu next-step button",
+                    "steps": steps,
+                }
+            steps.append({"step": "wait_after_next_step", "result": _safe_call(wait_fn, "", 1)})
+
+            image_edit_result = _retry(
+                "detect_image_edit",
+                lambda: _detect_image_edit(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=30,
+                interval=1,
+            )
+            if not image_edit_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to detect Xiaohongshu image edit screen",
+                    "steps": steps,
+                }
 
         publish_result = _retry(
             "click_final_publish",
@@ -1370,14 +2138,15 @@ def run(
         log_fn("Xiaohongshu publish button clicked")
         return {
             "success": True,
+            "mode": requested_mode,
             "content": publish_content,
             "phone_number": phone,
             "url": _safe_call(get_url_fn, ""),
             "steps": steps,
-            "message": "Xiaohongshu image-text content generated, advanced, and publish button clicked.",
+            "message": f"Xiaohongshu {requested_mode} publish completed, publish button clicked.",
         }
 
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
-        log_fn(f"Xiaohongshu image-text publish failed: {error}")
+        log_fn(f"Xiaohongshu publish failed: {error}")
         return {"success": False, "error": error, "steps": steps}
