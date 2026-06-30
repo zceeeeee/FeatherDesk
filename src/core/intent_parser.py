@@ -6,15 +6,21 @@ LLM 意图解析器 —— 当硬编码规则无法解析任务时，用 LLM 兜
 2. 技能库多个技能评分打平（歧义）
 
 返回结构化 TaskIntent，走现有的脚本模板拼装路径。
+
+内部使用 src.core.llm_client.LLMClient 统一调用 LLM，
+支持 OpenAI 兼容 API 和 Anthropic。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
+from typing import TYPE_CHECKING
 
 from src.core.script_generator import TaskIntent
+
+if TYPE_CHECKING:
+    from src.core.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +29,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _ACTIONS = [
-    "search",  # 搜索
-    "navigate",  # 导航到 URL
-    "screenshot",  # 截图
-    "extract",  # 提取页面文本
-    "fill",  # 填写表单
-    "paginate",  # 翻页遍历
-    "login",  # 登录
-    "click",  # 点击元素
-    "scroll",  # 滚动页面
-    "wait",  # 等待
-    "hot_search",  # 查看热搜
+    "search",       # 搜索
+    "navigate",     # 导航到 URL
+    "screenshot",   # 截图
+    "extract",      # 提取页面文本
+    "fill",         # 填写表单
+    "paginate",     # 翻页遍历
+    "login",        # 登录
+    "click",        # 点击元素
+    "scroll",       # 滚动页面
+    "wait",         # 等待
+    "hot_search",   # 查看热搜
 ]
 
 # 从 ScriptGenerator.SITE_META 同步（避免循环导入，这里硬编码一份）
@@ -103,24 +109,21 @@ class LLMIntentParser:
     """用 LLM 解析自然语言意图为 TaskIntent。
 
     仅当硬编码规则失败时调用，作为兜底方案。
+
+    内部委托给 LLMClient，支持 OpenAI 兼容 API 和 Anthropic。
     """
 
-    def __init__(
-        self,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        model: str | None = None,
-    ) -> None:
-        self._api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self._base_url = (
-            base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        ).rstrip("/")
-        self._model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    def __init__(self, client: LLMClient | None = None) -> None:
+        if client is not None:
+            self._client = client
+        else:
+            from src.core.llm_client import get_llm_client
+            self._client = get_llm_client()
 
     @property
     def available(self) -> bool:
         """是否有 API Key 可用。"""
-        return bool(self._api_key)
+        return self._client.available
 
     def parse(self, task: str) -> TaskIntent | None:
         """调用 LLM 解析任务意图。
@@ -131,8 +134,8 @@ class LLMIntentParser:
         Returns:
             TaskIntent 或 None（解析失败 / 置信度过低 / API 不可用）。
         """
-        if not self._api_key:
-            logger.warning("LLM fallback 不可用: 未设置 OPENAI_API_KEY")
+        if not self.available:
+            logger.warning("LLM fallback 不可用: 未配置 API Key")
             return None
 
         try:
@@ -143,28 +146,13 @@ class LLMIntentParser:
             return None
 
     def _call_llm(self, task: str) -> str:
-        """调用 OpenAI 兼容 API。"""
-        import httpx
-
-        url = f"{self._base_url}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._model,
-            "temperature": 0,
-            "max_tokens": 256,
-            "messages": [
-                {"role": "system", "content": _build_system_prompt()},
-                {"role": "user", "content": task},
-            ],
-        }
-
-        response = httpx.post(url, headers=headers, json=payload, timeout=15.0)
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        """调用 LLM（委托给 LLMClient）。"""
+        return self._client.chat(
+            task,
+            system_prompt=_build_system_prompt(),
+            temperature=0,
+            max_tokens=256,
+        )
 
     def _parse_response(self, raw: str) -> TaskIntent | None:
         """解析 LLM 返回的 JSON 为 TaskIntent。"""
