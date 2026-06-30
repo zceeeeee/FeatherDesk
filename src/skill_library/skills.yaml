@@ -347,7 +347,7 @@ skills:
   - id: "domain/xiaohongshu_publish"
     name: "小红书图文发布"
     type: "domain"
-    triggers: ["小红书", "xiaohongshu", "xhs", "rednote", "发布", "投稿", "图文", "笔记", "内容", "文案", "文字配图", "生成图片", "预览图片", "图片编辑", "下一步"]
+    triggers: ["小红书 发布","小红书发布"]
     url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com", "creator.xiaohongshu.com"]
     description: "检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后进入图文发布页点击文字配图，填写内容，生成图片并发布"
     version: "1.0.0"

@@ -121,8 +121,47 @@ SITE_LOGIN_COOKIES = {
 }
 
 
+def _cookie_values(state: dict) -> dict[str, str]:
+    return {
+        str(cookie.get("name", "")).lower(): str(cookie.get("value", "")).strip()
+        for cookie in state.get("cookies", [])
+    }
+
+
+def _zhihu_auth_state(state: dict) -> str:
+    """Detect Zhihu login from the z_c0 cookie."""
+    cookie_values = _cookie_values(state)
+    return "logged_in" if cookie_values.get("z_c0") else "logged_out"
+
+
+def _xiaohongshu_auth_state(state: dict) -> str:
+    """Detect Xiaohongshu login from values that differ before/after login."""
+    cookie_values = _cookie_values(state)
+    has_login_cookies = bool(
+        cookie_values.get("web_session")
+        and cookie_values.get("id_token")
+        and cookie_values.get("x-rednote-datactry")
+        and cookie_values.get("x-rednote-holderctry")
+    )
+    return "logged_in" if has_login_cookies else "logged_out"
+
+
+def _storage_state_auth_state(state: dict, domain: str | None = None) -> str:
+    """Return logged_in/logged_out/unknown for the current browser context."""
+    domain_key = (domain or "").lower()
+    if domain_key == "zhihu":
+        return _zhihu_auth_state(state)
+    if domain_key == "xiaohongshu":
+        return _xiaohongshu_auth_state(state)
+
+    return "logged_in" if _storage_state_has_session(state, domain) else "unknown"
+
+
 def _storage_state_has_session(state: dict, domain: str | None = None) -> bool:
     """Heuristic: decide whether current context contains save-worthy state."""
+    if (domain or "").lower() in {"zhihu", "xiaohongshu"}:
+        return _storage_state_auth_state(state, domain) == "logged_in"
+
     cookie_names = {
         str(cookie.get("name", "")).lower() for cookie in state.get("cookies", [])
     }
@@ -1034,7 +1073,7 @@ HTML_TEMPLATE = """
     </footer>
 
     <script>
-        const promptedSaveDomains = new Set();
+        const promptedSaveDomains = new Map();
         let authPollTimer = null;
 
         async function maybeLoadSavedAuth(task, options) {
@@ -1080,10 +1119,11 @@ HTML_TEMPLATE = """
                 if (!result.domain || !result.has_session) {
                     return;
                 }
-                if (promptedSaveDomains.has(result.domain)) {
+                const promptState = result.has_auth ? 'has-auth' : 'no-auth';
+                if (promptedSaveDomains.get(result.domain) === promptState) {
                     return;
                 }
-                promptedSaveDomains.add(result.domain);
+                promptedSaveDomains.set(result.domain, promptState);
                 const action = result.has_auth ? '更新保存' : '保存';
                 const ok = confirm(`检测到当前 ${result.domain} 页面可能已有登录状态，是否${action}登录信息？`);
                 if (!ok) {
@@ -1096,6 +1136,7 @@ HTML_TEMPLATE = """
                 });
                 const saved = await saveResponse.json();
                 if (saved.success) {
+                    promptedSaveDomains.set(result.domain, 'has-auth');
                     alert(`已保存 ${result.domain} 登录信息：${saved.path}`);
                 } else {
                     alert(`保存失败：${saved.error || '未知错误'}`);
@@ -1623,11 +1664,13 @@ def api_auth_current():
             return jsonify({"browser_running": False})
         current_url = page.url
         domain = bm.current_domain or _domain_from_url(current_url)
+        auth_state = "unknown"
         has_session = False
 
         if bm._context is not None:
             state = bm._context.storage_state()
-            has_session = _storage_state_has_session(state, domain)
+            auth_state = _storage_state_auth_state(state, domain)
+            has_session = auth_state == "logged_in"
 
         am = get_auth_manager()
         return jsonify(
@@ -1635,6 +1678,7 @@ def api_auth_current():
                 "browser_running": True,
                 "url": current_url,
                 "domain": domain,
+                "auth_state": auth_state,
                 "has_auth": am.has_auth(domain) if domain else False,
                 "has_session": has_session,
             }
