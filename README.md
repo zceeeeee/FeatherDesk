@@ -9,7 +9,7 @@
 **AI 不是逐个调用工具，而是编写 Python 脚本。** 用得越多，系统越聪明。
 
 ```
-用户意图 → 技能库触发词匹配 → 命中 → 生成脚本 → 脚本引擎执行 → 浏览器操作
+用户意图 → 技能路由器（关键词快筛 + LLM 精排）→ 命中 → 参数化脚本生成 → 脚本引擎执行 → 浏览器操作
    ↳ 若未命中 → 经验库查找 → 生成临时脚本 → 沙箱执行 → 保存经验
    ↳ 若规则失败 → LLM 意图解析（兜底） → 结构化意图 → 生成脚本
    ↳ 若执行失败 → 自愈机制 → 视觉 fallback → 记录新知识
@@ -272,6 +272,50 @@ workspace/
 - **选择器经验**：记录每个选择器的成功/失败次数，按可靠性排序
 - **站点知识**：记录每个网站的特殊行为和注意事项
 
+## LLM 客户端
+
+统一的 AI 模型调用接口，支持 OpenAI 兼容 API 和 Anthropic Claude。
+
+```python
+from src.core.llm_client import get_llm_client
+
+client = get_llm_client()
+
+# 接口 1: 自由文本对话
+reply = client.chat("用一句话解释什么是 Playwright")
+
+# 接口 2: 结构化 JSON 输出
+result = client.chat_json(
+    "用户说: 在百度搜索 Python 教程",
+    system_prompt="提取站点和关键词",
+    schema={"site": "string", "keyword": "string"},
+)
+# → {"site": "baidu", "keyword": "Python 教程"}
+```
+
+**Provider 配置**（`.env`）：
+
+```env
+# 切换 provider: "openai" (默认) | "anthropic"
+LLM_PROVIDER=openai
+
+# OpenAI 兼容 API
+OPENAI_API_KEY=sk-your-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+
+# Anthropic
+ANTHROPIC_API_KEY=sk-ant-your-key
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+
+# 通用参数
+LLM_TEMPERATURE=0
+LLM_MAX_TOKENS=1024
+LLM_TIMEOUT=30
+```
+
+启动 GUI 时如果没有配置 API Key，会自动弹出引导界面。
+
 ## CloakBrowser 反检测引擎
 
 ```bash
@@ -316,6 +360,8 @@ agentic-playwright-mcp/
 │   ├── sdk.py                     # Python SDK
 │   ├── core/
 │   │   ├── agent_loop.py          # Agent 循环引擎
+│   │   ├── skill_router.py        # 技能路由器（关键词快筛 + LLM 精排）
+│   │   ├── llm_client.py          # LLM 客户端（chat / chat_json 双接口）
 │   │   ├── auth_manager.py        # Cookie 持久化管理
 │   │   ├── script_engine.py       # 脚本执行引擎（注入面板函数）
 │   │   ├── script_generator.py    # 任务意图解析（规则）
@@ -335,7 +381,7 @@ agentic-playwright-mcp/
 │   └── skill_library/             # 标准脚本库
 ├── domains/                       # 站点选择器配置（19 个）
 ├── workspace/                     # 经验存储
-├── tests/                         # 570 个测试
+├── tests/                         # 685 个测试
 ├── docs/                          # MkDocs 文档
 ├── examples/                      # 示例脚本
 └── Makefile

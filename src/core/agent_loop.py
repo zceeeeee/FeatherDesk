@@ -44,12 +44,28 @@ from src.core.experience import ExperienceManager, get_experience_manager
 from src.core.intent_parser import LLMIntentParser, get_llm_intent_parser
 from src.core.script_engine import get_script_engine
 from src.core.script_generator import ScriptGenerator
+from src.core.skill_router import SkillDecision, SkillRouter, get_skill_router
 from src.core.vision import VisionModule, get_vision_module
 from src.layer_2.controls import get_controls_exports
 from src.logging import bind_context, get_logger, log_timing
 from src.skill_library.registry import SkillRegistry, get_skill_registry
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LLM 调用适配器 —— 让 SkillRouter 复用 LLMIntentParser 的 HTTP 能力
+# ---------------------------------------------------------------------------
+
+
+class _LLMCallerAdapter:
+    """将 LLMIntentParser._call_llm 包装为 SkillRouter 期望的 .call() 接口。"""
+
+    def __init__(self, parser: LLMIntentParser) -> None:
+        self._parser = parser
+
+    def call(self, prompt: str) -> str:
+        return self._parser._call_llm(prompt)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +147,7 @@ class AgentLoop:
         # 延迟初始化的模块
         self._vision: VisionModule | None = None
         self._registry: SkillRegistry | None = None
+        self._skill_router: SkillRouter | None = None
         self._script_engine = None
         self._script_generator = ScriptGenerator()
         self._experience: ExperienceManager | None = None
@@ -280,6 +297,16 @@ class AgentLoop:
         if self._llm_parser is None:
             self._llm_parser = get_llm_intent_parser()
 
+        if self._skill_router is None:
+            llm_adapter = (
+                _LLMCallerAdapter(self._llm_parser)
+                if self._llm_parser and self._llm_parser.available
+                else None
+            )
+            self._skill_router = get_skill_router(
+                library_dir=self._library_dir, llm_caller=llm_adapter
+            )
+
     # -------------------------------------------------------------------
     # Event emission helpers
     # -------------------------------------------------------------------
@@ -416,43 +443,75 @@ class AgentLoop:
             logger.info("PLAN: cancelled by hook")
             return AgentState.FAILED
 
-        # 1. 查找匹配的技能
+        # 1. 两阶段路由：关键词快筛 + LLM 精排
+        with log_timing("agent_plan_skill_router") as meta:
+            page_context = {
+                "url": get_browser_manager().get_page().url,
+                "title": get_browser_manager().get_page().title(),
+            }
+            decision = self._skill_router.route(task, page_context=page_context)
+            meta["source"] = decision.source
+            meta["confidence"] = decision.confidence
+            meta["skill_id"] = decision.skill.id if decision.skill else None
+
+        if decision.skill and decision.script:
+            step.action = f"使用技能: {decision.skill.name}"
+            step.script = decision.script
+            step.result = (
+                f"路由命中: {decision.skill.name} "
+                f"(来源: {decision.source}, 置信度: {decision.confidence:.2f})"
+            )
+            logger.info(
+                "PLAN: router matched '%s' via %s (confidence=%.2f)",
+                decision.skill.name,
+                decision.source,
+                decision.confidence,
+            )
+            self._bus.emit(
+                Event(
+                    name=EVENT_AGENT_PLAN,
+                    phase=Phase.AFTER,
+                    data={
+                        "step_number": step.step_number,
+                        "source": f"skill_router:{decision.source}",
+                        "skill_id": decision.skill.id,
+                        "skill_name": decision.skill.name,
+                        "confidence": decision.confidence,
+                    },
+                    result=step.result,
+                )
+            )
+            return AgentState.ACT
+
+        if decision.skill and not decision.script:
+            logger.info(
+                "PLAN: router matched '%s' but script generation failed, falling through",
+                decision.skill.name,
+            )
+
+        # 1b. 回退：旧的 registry.search + _build_skill_script 路径
         with log_timing("agent_plan_skill_lookup") as meta:
             skills = self._registry.search(query=task)
             meta["matches"] = len(skills)
 
         if skills:
-            # 检查是否有歧义（多个技能评分打平）
             skill = self._select_best_skill(skills, task)
-
-            # 歧义仲裁：如果 LLM 可用，让它决定用哪个技能
-            if (
-                self._has_ambiguity(skills, task)
-                and self._llm_parser
-                and self._llm_parser.available
-            ):
-                logger.info("PLAN: 技能库歧义 (%d 个候选)，尝试 LLM 仲裁", len(skills))
-                resolved = self._resolve_skill_with_llm(task, skills)
-                if resolved:
-                    skill = resolved
-
             detail = self._registry.get_detail(skill.id)
 
             if detail and detail.source_code:
-                # 从任务中提取关键词，生成可执行脚本
                 script = self._build_skill_script(detail.source_code, task, skill.id)
                 if script:
                     step.action = f"使用技能: {skill.name}"
                     step.script = script
-                    step.result = f"找到技能: {skill.name}"
-                    logger.info("PLAN: matched skill '%s'", skill.name)
+                    step.result = f"找到技能: {skill.name} (registry 回退)"
+                    logger.info("PLAN: registry fallback matched '%s'", skill.name)
                     self._bus.emit(
                         Event(
                             name=EVENT_AGENT_PLAN,
                             phase=Phase.AFTER,
                             data={
                                 "step_number": step.step_number,
-                                "source": "skill_library",
+                                "source": "skill_registry_fallback",
                                 "skill_id": skill.id,
                                 "skill_name": skill.name,
                             },
@@ -460,11 +519,6 @@ class AgentLoop:
                         )
                     )
                     return AgentState.ACT
-                else:
-                    logger.info(
-                        "PLAN: 技能 '%s' 匹配但关键词提取失败，跳过",
-                        skill.name,
-                    )
 
         # 2. 查找已保存的脚本（经验复用）
         saved_script = self._experience.find_script(task)

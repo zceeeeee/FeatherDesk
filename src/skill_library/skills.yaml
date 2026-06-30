@@ -1,14 +1,26 @@
-﻿# skills.yaml -- 技能索引配置
+# skills.yaml -- 技能索引配置
 #
-# 本文件是 skill_library 的唯一数据源，由 SkillRegistry.load_from_yaml() 加载。
-# 替代原来的 registry.json，统一使用 YAML 格式。
+# 本文件是 skill_library 的唯一数据源，由 SkillRegistry.load_from_yaml() 和
+# SkillRouter 加载。
 #
 # 结构:
-#   skills   - 技能元数据列表（对应 SkillMeta）
+#   skills   - 技能元数据列表（对应 SkillMeta + 路由扩展字段）
 #   sources  - 文件映射列表（对应 SkillFileMapping，用于动态加载和实例化）
+#
+# 路由扩展字段（由 SkillRouter 使用）:
+#   examples           - 示例任务描述列表，用于关键词匹配和 LLM 精排
+#   params             - 参数声明，用于从任务中自动提取参数
+#     type             - 参数类型: keyword | phone | email | url | quoted | string
+#     required         - 是否必填
+#     description      - 参数描述（给 LLM 看的）
+#     extract_patterns - 自定义正则提取模式列表（优先于通用提取）
+#   confirm_before_run - 是否需要用户确认后才执行（发布类操作）
 
 skills:
+  # ──────────────────────────────────────────────
   # 搜索引擎
+  # ──────────────────────────────────────────────
+
   - id: "domain/baidu_search"
     name: "百度搜索"
     type: "domain"
@@ -16,6 +28,16 @@ skills:
     url_patterns: ["baidu.com"]
     description: "在百度搜索关键词并返回结果"
     version: "1.0.0"
+    examples:
+      - "在百度搜索 Python 教程"
+      - "百度查一下今天的天气"
+      - "用百度搜一下附近的餐厅"
+      - "帮我在百度搜索最新新闻"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/google_search"
     name: "Google 搜索"
@@ -24,6 +46,15 @@ skills:
     url_patterns: ["google.com"]
     description: "在 Google 搜索关键词"
     version: "1.0.0"
+    examples:
+      - "在 Google 搜索 Python tutorial"
+      - "谷歌搜一下 machine learning"
+      - "用 Google 查一下航班信息"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/bing_search"
     name: "Bing 搜索"
@@ -32,8 +63,19 @@ skills:
     url_patterns: ["bing.com"]
     description: "在 Bing 搜索关键词"
     version: "1.0.0"
+    examples:
+      - "在 Bing 搜索天气预报"
+      - "必应搜一下最近的新闻"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
+  # ──────────────────────────────────────────────
   # GitHub
+  # ──────────────────────────────────────────────
+
   - id: "domain/github_login"
     name: "GitHub 登录"
     type: "domain"
@@ -41,6 +83,23 @@ skills:
     url_patterns: ["*.github.com"]
     description: "登录 GitHub 账号"
     version: "1.0.0"
+    examples:
+      - "登录 GitHub"
+      - "帮我登录 github 账号"
+      - "GitHub 登录 用户名 xxx 密码 yyy"
+    params:
+      username:
+        type: string
+        required: true
+        description: "GitHub 用户名或邮箱"
+        extract_patterns:
+          - "(?:用户名|用户|账号|邮箱|username|email)\\s*(?:是|为|:|：)?\\s*['\"]?([^'\"\\s,，;；。]+)"
+      password:
+        type: string
+        required: true
+        description: "GitHub 密码"
+        extract_patterns:
+          - "(?:密码|口令|password|pass)\\s*(?:是|为|:|：)?\\s*['\"]?([^'\"\\s,，;；。]+)"
 
   - id: "domain/github_search"
     name: "GitHub 搜索"
@@ -49,6 +108,15 @@ skills:
     url_patterns: ["github.com/search"]
     description: "在 GitHub 搜索仓库/代码/用户"
     version: "1.0.0"
+    examples:
+      - "在 GitHub 搜索 playwright 仓库"
+      - "GitHub 上找一下 Python 的爬虫项目"
+      - "搜一下 GitHub 上的 awesome-python"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/github_repos"
     name: "GitHub 仓库列表"
@@ -57,8 +125,14 @@ skills:
     url_patterns: ["github.com"]
     description: "查看 GitHub 仓库列表"
     version: "1.0.0"
+    examples:
+      - "看看我的 GitHub 仓库"
+      - "GitHub 上有哪些项目"
 
+  # ──────────────────────────────────────────────
   # 电商
+  # ──────────────────────────────────────────────
+
   - id: "domain/amazon_search"
     name: "Amazon 搜索"
     type: "domain"
@@ -66,8 +140,19 @@ skills:
     url_patterns: ["amazon.com"]
     description: "在 Amazon 搜索商品"
     version: "1.0.0"
+    examples:
+      - "在 Amazon 搜索蓝牙耳机"
+      - "亚马逊上找一下机械键盘"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
+  # ──────────────────────────────────────────────
   # 邮箱
+  # ──────────────────────────────────────────────
+
   - id: "domain/gmail_inbox"
     name: "Gmail 收件箱"
     type: "domain"
@@ -75,6 +160,9 @@ skills:
     url_patterns: ["mail.google.com"]
     description: "打开 Gmail 收件箱"
     version: "1.0.0"
+    examples:
+      - "打开 Gmail 收件箱"
+      - "看看我的谷歌邮箱"
 
   - id: "domain/gmail_login"
     name: "Gmail 登录"
@@ -83,6 +171,21 @@ skills:
     url_patterns: ["mail.google.com", "accounts.google.com"]
     description: "打开 Gmail 中文登录页，填写邮箱和密码，选择第一种登录方式，等待用户输入验证码后完成登录"
     version: "1.0.0"
+    examples:
+      - "登录 Gmail"
+      - "帮我登录谷歌邮箱"
+      - "Gmail 登录 邮箱 test@gmail.com 密码 xxx"
+    params:
+      email:
+        type: email
+        required: true
+        description: "Gmail 邮箱地址"
+      password:
+        type: string
+        required: true
+        description: "Gmail 密码"
+        extract_patterns:
+          - "(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\\s,，;；。)）]+)"
 
   - id: "domain/outlook_inbox"
     name: "Outlook 收件箱"
@@ -91,8 +194,14 @@ skills:
     url_patterns: ["outlook.live.com"]
     description: "打开 Outlook 收件箱"
     version: "1.0.0"
+    examples:
+      - "打开 Outlook 收件箱"
+      - "看看我的微软邮箱"
 
+  # ──────────────────────────────────────────────
   # 视频
+  # ──────────────────────────────────────────────
+
   - id: "domain/youtube_search"
     name: "YouTube 搜索"
     type: "domain"
@@ -100,6 +209,14 @@ skills:
     url_patterns: ["youtube.com"]
     description: "在 YouTube 搜索视频"
     version: "1.0.0"
+    examples:
+      - "在 YouTube 搜索猫咪视频"
+      - "油管上找一下 Python 教程"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/bilibili_search"
     name: "Bilibili 搜索"
@@ -108,14 +225,15 @@ skills:
     url_patterns: ["bilibili.com"]
     description: "在 Bilibili 搜索视频、番剧、用户和相关内容"
     version: "1.0.0"
-
-  - id: "domain/xiaohongshu_search"
-    name: "小红书搜索"
-    type: "domain"
-    triggers: ["xiaohongshu", "小红书"]
-    url_patterns: ["xiaohongshu.com"]
-    description: "在 小红书搜索"
-    version: "1.0.0"
+    examples:
+      - "在 B 站搜索 Python 教程"
+      - "bilibili 上找一下游戏视频"
+      - "去哔哩哔哩搜一下编程入门"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/bilibili_login"
     name: "Bilibili 短信登录"
@@ -124,6 +242,15 @@ skills:
     url_patterns: ["bilibili.com", "*.bilibili.com"]
     description: "打开 Bilibili 登录弹窗，切换短信登录，填写手机号并发送验证码，真人认证和验证码由用户手动完成"
     version: "1.0.0"
+    examples:
+      - "B站登录"
+      - "bilibili 短信登录"
+      - "帮我登录 B 站"
+    params:
+      phone:
+        type: phone
+        required: true
+        description: "手机号码"
 
   - id: "domain/bilibili_publish"
     name: "Bilibili 文章投稿"
@@ -132,6 +259,27 @@ skills:
     url_patterns: ["bilibili.com", "*.bilibili.com", "member.bilibili.com"]
     description: "完成 Bilibili 短信登录后进入文章投稿页，填写标题和正文并点击发布"
     version: "1.0.0"
+    examples:
+      - "在 B 站投稿一篇文章"
+      - "bilibili 发布文章"
+    params:
+      phone:
+        type: phone
+        required: true
+        description: "手机号码"
+      title:
+        type: string
+        required: true
+        description: "文章标题"
+        extract_patterns:
+          - "(?:标题|题目|title)\\s*(?:是|为|:|：)?\\s*['\"\"'']?(.*?)(?=(?:正文|内容|文章内容|body|content)\\s*(?:是|为|:|：)|$)"
+      body:
+        type: string
+        required: true
+        description: "文章正文"
+        extract_patterns:
+          - "(?:正文|内容|文章内容|body|content)\\s*(?:是|为|:|：)?\\s*['\"\"'']?(.+)$"
+    confirm_before_run: true
 
   - id: "domain/bilibili_comment"
     name: "Bilibili 视频评论"
@@ -140,8 +288,30 @@ skills:
     url_patterns: ["bilibili.com", "*.bilibili.com", "bilibili.com/video/"]
     description: "完成 Bilibili 短信登录后进入视频页面，填写评论内容并点击发送"
     version: "1.0.0"
+    examples:
+      - "在 B 站视频下面留言"
+      - "bilibili 视频评论"
+    params:
+      phone:
+        type: phone
+        required: true
+        description: "手机号码"
+      comment:
+        type: quoted
+        required: true
+        description: "评论内容"
+        extract_patterns:
+          - "(?:评论|留言|回复)\\s*(?:是|为|:|：)?\\s*['\"\"'']?(.+?)(?=(?:在|然后|并且|接着)|$)"
+      video_url:
+        type: url
+        required: false
+        description: "视频 URL（可选，默认使用当前页面）"
+    confirm_before_run: true
 
+  # ──────────────────────────────────────────────
   # 社交媒体
+  # ──────────────────────────────────────────────
+
   - id: "domain/douyin_login"
     name: "抖音验证码登录"
     type: "domain"
@@ -149,6 +319,14 @@ skills:
     url_patterns: ["douyin.com", "*.douyin.com"]
     description: "填写抖音手机号并获取短信验证码，验证码由用户手动输入"
     version: "1.0.0"
+    examples:
+      - "登录抖音"
+      - "帮我登录抖音账号"
+    params:
+      phone:
+        type: phone
+        required: true
+        description: "手机号码"
 
   - id: "domain/xiaohongshu_login"
     name: "小红书验证码登录"
@@ -157,6 +335,14 @@ skills:
     url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com"]
     description: "填写小红书手机号、勾选协议并获取短信验证码，验证码由用户手动输入"
     version: "1.0.0"
+    examples:
+      - "登录小红书"
+      - "帮我登录小红书账号"
+    params:
+      phone:
+        type: phone
+        required: true
+        description: "手机号码"
 
   - id: "domain/xiaohongshu_publish"
     name: "小红书图文发布"
@@ -165,6 +351,23 @@ skills:
     url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com", "creator.xiaohongshu.com"]
     description: "检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后进入图文发布页点击文字配图，填写内容，生成图片并发布"
     version: "1.0.0"
+    examples:
+      - "在小红书发布一篇图文笔记"
+      - "小红书发一条笔记 内容是 今天天气真好"
+      - "帮我发一个小红书图文"
+    params:
+      content:
+        type: quoted
+        required: true
+        description: "图文内容 / 笔记文案"
+        extract_patterns:
+          - "(?:图文内容|笔记内容|发布内容|内容|正文|文案|caption|content)\\s*(?:是|为|:|：)?\\s*['\"\"'']?(.+?)(?=\\s*(?:电话号码|电话|手机号|phone)\\s*(?:是|为|:|：)|$)"
+          - "(?:发布|发表|生成).{0,12}(?:图文|笔记).{0,16}['\"\"'']?(.+?)['\"\"'']"
+      phone:
+        type: phone
+        required: false
+        description: "手机号码（登录用，可选）"
+    confirm_before_run: true
 
   - id: "domain/weibo_search"
     name: "微博搜索"
@@ -173,6 +376,14 @@ skills:
     url_patterns: ["weibo.com"]
     description: "在微博搜索"
     version: "1.0.0"
+    examples:
+      - "在微博搜索热门话题"
+      - "微博上搜一下明星动态"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/zhihu_search"
     name: "知乎搜索"
@@ -181,14 +392,14 @@ skills:
     url_patterns: ["zhihu.com"]
     description: "在知乎搜索"
     version: "1.0.0"
-
-  - id: "domain/bilibili_search"
-    name: "b站搜索"
-    type: "domain"
-    triggers: ["b站", "bilibili", "搜索", "问答"]
-    url_patterns: ["bilibili.com"]
-    description: "在b站搜索"
-    version: "1.0.0"
+    examples:
+      - "在知乎搜索 Python 入门"
+      - "知乎上搜一下如何学编程"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/taobao_search"
     name: "淘宝搜索"
@@ -197,6 +408,14 @@ skills:
     url_patterns: ["taobao.com"]
     description: "在淘宝搜索"
     version: "1.0.0"
+    examples:
+      - "在淘宝搜索蓝牙耳机"
+      - "淘宝上找一下手机壳"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/doubao_search"
     name: "豆包搜索"
@@ -205,14 +424,46 @@ skills:
     url_patterns: ["doubao.com"]
     description: "在豆包搜索"
     version: "1.0.0"
+    examples:
+      - "在豆包搜索 AI 知识"
+      - "用豆包搜一下机器学习"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/csnd_search"
-    name: "csnd搜索"
+    name: "CSDN 搜索"
     type: "domain"
-    triggers: ["csnd",  "搜索", "问答"]
-    url_patterns: ["csnd.com"]
-    description: "在csnd搜索"
+    triggers: ["csnd", "csdn", "搜索", "问答"]
+    url_patterns: ["csdn.net"]
+    description: "在 CSDN 搜索技术文章"
     version: "1.0.0"
+    examples:
+      - "在 CSDN 搜索 Python 教程"
+      - "csdn 上找一下 Java 面试题"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
+
+  - id: "domain/xiaohongshu_search"
+    name: "小红书搜索"
+    type: "domain"
+    triggers: ["xiaohongshu", "小红书"]
+    url_patterns: ["xiaohongshu.com"]
+    description: "在小红书搜索笔记和内容"
+    version: "1.0.0"
+    examples:
+      - "在小红书搜索旅游攻略"
+      - "小红书上找一下美食推荐"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "domain/zhihu_send"
     name: "知乎发布"
@@ -221,8 +472,23 @@ skills:
     url_patterns: ["zhihu.com", "zhuanlan.zhihu.com"]
     description: "在知乎发布文章"
     version: "1.0.0"
+    examples:
+      - "在知乎发布一篇文章"
+      - "知乎发文章 内容是 如何学习编程"
+    params:
+      content:
+        type: quoted
+        required: true
+        description: "文章内容"
+        extract_patterns:
+          - "(?:在|到)?知乎(?:上)?(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
+          - "(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
+    confirm_before_run: true
 
+  # ──────────────────────────────────────────────
   # 通用交互模板
+  # ──────────────────────────────────────────────
+
   - id: "interaction/login_flow"
     name: "通用登录"
     type: "interaction"
@@ -230,6 +496,9 @@ skills:
     url_patterns: []
     description: "通用登录流程：填写用户名密码并提交"
     version: "1.0.0"
+    examples:
+      - "登录这个网站"
+      - "帮我登录当前页面的账号"
 
   - id: "interaction/search_flow"
     name: "通用搜索"
@@ -238,6 +507,14 @@ skills:
     url_patterns: []
     description: "通用搜索流程：输入关键词并点击搜索"
     version: "1.0.0"
+    examples:
+      - "搜索一下这个网站"
+      - "在当前页面搜索"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
   - id: "interaction/form_fill"
     name: "通用表单填写"
@@ -246,6 +523,9 @@ skills:
     url_patterns: []
     description: "通用表单填写：批量填写多个表单字段"
     version: "1.0.0"
+    examples:
+      - "帮我填写这个表单"
+      - "注册一个账号"
 
   - id: "interaction/pagination"
     name: "通用分页翻页"
@@ -254,9 +534,14 @@ skills:
     url_patterns: []
     description: "通用分页翻页：遍历多页内容"
     version: "1.0.0"
+    examples:
+      - "翻到下一页"
+      - "继续浏览下一页"
 
-# sources 段 -- 文件映射，用于动态加载技能模块和实例化 SkillBase 子类
-# id 必须与上方 skills 中的 id 一致
+# ──────────────────────────────────────────────
+# sources 段 -- 文件映射
+# ──────────────────────────────────────────────
+
 sources:
   - id: "domain/baidu_search"
     file: "search/baidu_search.py"
@@ -338,24 +623,8 @@ sources:
     file: "search/zhihu_search.py"
     entry: "run"
 
-  - id: "interaction/login_flow"
-    file: "others/login_flow.py"
-    entry: "run"
-
-  - id: "interaction/search_flow"
-    file: "search/search_flow.py"
-    entry: "run"
-
-  - id: "interaction/form_fill"
-    file: "others/form_fill.py"
-    entry: "run"
-
-  - id: "interaction/pagination"
-    file: "others/pagination.py"
-    entry: "run"
-
-  - id: "domain/bilibili_search"
-    file: "search/bilibili_search.py"
+  - id: "domain/xiaohongshu_search"
+    file: "search/xiaohongshu_search.py"
     entry: "run"
 
   - id: "domain/taobao_search"
@@ -370,10 +639,22 @@ sources:
     file: "search/csnd_search.py"
     entry: "run"
 
-  - id: "domain/xiaohongshu_search"
-    file: "search/xiaohongshu_search.py"
-    entry: "run"
-
   - id: "domain/zhihu_send"
     file: "send/zhihu_send.py"
+    entry: "run"
+
+  - id: "interaction/login_flow"
+    file: "others/login_flow.py"
+    entry: "run"
+
+  - id: "interaction/search_flow"
+    file: "search/search_flow.py"
+    entry: "run"
+
+  - id: "interaction/form_fill"
+    file: "others/form_fill.py"
+    entry: "run"
+
+  - id: "interaction/pagination"
+    file: "others/pagination.py"
     entry: "run"

@@ -131,35 +131,71 @@ async def execute(self, page, context: SkillContext) -> SkillResult:
 ```yaml
 # src/skill_library/skills.yaml
 skills:
-  - id: baidu_search
-    name: 百度搜索
-    type: domain
-    triggers:
-      - 百度
-      - 搜索
-      - baidu
-    url_patterns:
-      - "*.baidu.com"
-    file: search/baidu_search.py
-    function: run
-    description: 在百度搜索关键词
-    priority: 10
-    dependencies: []
+  - id: "domain/baidu_search"
+    name: "百度搜索"
+    type: "domain"
+    triggers: ["百度", "baidu", "搜索", "search"]
+    url_patterns: ["baidu.com"]
+    description: "在百度搜索关键词并返回结果"
+    version: "1.0.0"
+    examples:
+      - "在百度搜索 Python 教程"
+      - "百度查一下今天的天气"
+      - "用百度搜一下附近的餐厅"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
 
-  - id: login_flow
-    name: 通用登录
-    type: interaction
-    triggers:
-      - 登录
-      - login
-      - sign in
-    url_patterns:
-      - "*"
-    file: others/login_flow.py
-    function: run
-    description: 通用登录流程
-    priority: 5
-    dependencies: []
+  - id: "domain/github_login"
+    name: "GitHub 登录"
+    type: "domain"
+    triggers: ["github", "登录", "login"]
+    url_patterns: ["*.github.com"]
+    description: "登录 GitHub 账号"
+    version: "1.0.0"
+    examples:
+      - "登录 GitHub"
+      - "帮我登录 github 账号"
+    params:
+      username:
+        type: string
+        required: true
+        description: "GitHub 用户名或邮箱"
+        extract_patterns:
+          - "(?:用户名|账号|邮箱)\\s*(?:是|:)?\\s*['\"]?([^'\"\\s]+)"
+      password:
+        type: string
+        required: true
+        description: "GitHub 密码"
+        extract_patterns:
+          - "(?:密码|password)\\s*(?:是|:)?\\s*['\"]?([^'\"\\s]+)"
+
+  - id: "interaction/login_flow"
+    name: "通用登录"
+    type: "interaction"
+    triggers: ["登录", "login", "sign in"]
+    url_patterns: []
+    description: "通用登录流程：填写用户名密码并提交"
+    version: "1.0.0"
+    examples:
+      - "登录这个网站"
+      - "帮我登录当前页面的账号"
+
+# sources 段 -- 文件映射
+sources:
+  - id: "domain/baidu_search"
+    file: "search/baidu_search.py"
+    entry: "run"
+
+  - id: "domain/github_login"
+    file: "others/github_login.py"
+    entry: "run"
+
+  - id: "interaction/login_flow"
+    file: "others/login_flow.py"
+    entry: "run"
 ```
 
 ### 字段说明
@@ -171,11 +207,58 @@ skills:
 | `type` | `string` | 是 | 技能类型：`domain` 或 `interaction` |
 | `triggers` | `list[string]` | 是 | 触发关键词 |
 | `url_patterns` | `list[string]` | 是 | URL 匹配模式 |
-| `file` | `string` | 是 | 技能文件路径 |
-| `function` | `string` | 是 | 入口函数名 |
+| `file` | `string` | 是 | 技能文件路径（在 `sources` 段中） |
+| `function` | `string` | 是 | 入口函数名（在 `sources` 段中） |
 | `description` | `string` | 是 | 技能描述 |
-| `priority` | `int` | 否 | 优先级（默认 0，数值越大优先级越高） |
-| `dependencies` | `list[string]` | 否 | 依赖的其他技能 |
+| `examples` | `list[string]` | 否 | 示例任务描述，用于路由器匹配和 LLM 精排 |
+| `params` | `object` | 否 | 参数声明，用于从任务中自动提取参数 |
+| `confirm_before_run` | `bool` | 否 | 是否需要用户确认后才执行（发布类操作） |
+
+### 路由扩展字段
+
+`examples` 和 `params` 是技能路由器（`SkillRouter`）使用的扩展字段，用于提升匹配精度和自动化参数提取。
+
+**examples** — 示例任务描述：
+
+```yaml
+examples:
+  - "在百度搜索 Python 教程"
+  - "百度查一下今天的天气"
+  - "用百度搜一下附近的餐厅"
+```
+
+路由器通过 token 级重叠计算用户输入与示例的相似度，同时作为 LLM 精排的 few-shot 参考。
+
+**params** — 参数声明：
+
+```yaml
+params:
+  keyword:
+    type: keyword          # 参数类型
+    required: true         # 是否必填
+    description: "搜索关键词"  # 给 LLM 看的描述
+  phone:
+    type: phone
+    required: true
+    description: "手机号码"
+  content:
+    type: quoted
+    required: true
+    description: "发布内容"
+    extract_patterns:      # 自定义正则（优先于通用提取）
+      - "(?:内容|正文)\\s*(?:是|:)?\\s*['\"]?(.+)$"
+```
+
+**参数类型**：
+
+| type | 说明 | 提取方式 |
+|------|------|---------|
+| `keyword` | 搜索关键词 | 去掉动作词和站点名后的剩余文本 |
+| `phone` | 手机号码 | 正则匹配 `1[3-9]xxxxxxxxx` |
+| `email` | 邮箱地址 | 正则匹配邮箱格式 |
+| `url` | URL | 正则匹配 `https?://...` |
+| `quoted` | 引号内容 | 匹配引号内的文本 |
+| `string` | 通用字符串 | 使用 `extract_patterns` 自定义提取 |
 
 ## 创建新技能
 

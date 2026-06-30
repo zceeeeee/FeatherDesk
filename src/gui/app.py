@@ -786,6 +786,136 @@ HTML_TEMPLATE = """
             .section-heading { font-size: 28px; }
             .skills-grid { grid-template-columns: 1fr; }
         }
+
+        /* ── Setup Modal ── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: rgba(0,0,0,0.45);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box {
+            background: var(--canvas);
+            border-radius: var(--radius-lg);
+            box-shadow: 0 24px 64px rgba(0,0,0,0.18);
+            width: 440px;
+            max-width: 92vw;
+            padding: var(--sp-xxl) var(--sp-xxl) var(--sp-lg);
+            animation: modalIn .2s ease-out;
+        }
+        @keyframes modalIn {
+            from { opacity: 0; transform: translateY(16px) scale(0.97); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .modal-box h2 {
+            font-family: var(--font-display);
+            font-size: 22px;
+            margin-bottom: var(--sp-xs);
+        }
+        .modal-box .modal-desc {
+            font-size: 14px;
+            color: var(--steel);
+            margin-bottom: var(--sp-lg);
+        }
+        .modal-field {
+            margin-bottom: var(--sp-md);
+        }
+        .modal-field label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--slate);
+            margin-bottom: var(--sp-xxs);
+        }
+        .modal-field input, .modal-field select {
+            width: 100%;
+            padding: 10px 12px;
+            font-size: 14px;
+            border: 1px solid var(--hairline-strong);
+            border-radius: var(--radius-sm);
+            background: var(--surface);
+            color: var(--ink);
+            font-family: var(--font-body);
+            transition: border-color .15s;
+        }
+        .modal-field input:focus, .modal-field select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(250,82,15,0.1);
+        }
+        .modal-field input::placeholder { color: var(--muted); }
+        .modal-hint {
+            font-size: 12px;
+            color: var(--stone);
+            margin-top: 2px;
+        }
+        .modal-actions {
+            display: flex;
+            gap: var(--sp-sm);
+            margin-top: var(--sp-lg);
+        }
+        .modal-actions button {
+            flex: 1;
+            padding: 10px 0;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            border: none;
+            transition: background .15s;
+        }
+        .btn-modal-primary {
+            background: var(--primary);
+            color: var(--on-primary);
+        }
+        .btn-modal-primary:hover { background: var(--primary-deep); }
+        .btn-modal-primary:disabled { opacity: .5; cursor: not-allowed; }
+        .btn-modal-ghost {
+            background: transparent;
+            color: var(--steel);
+            border: 1px solid var(--hairline-strong) !important;
+        }
+        .btn-modal-ghost:hover { background: var(--surface); }
+        .modal-error {
+            font-size: 13px;
+            color: #c5221f;
+            margin-top: var(--sp-xs);
+            display: none;
+        }
+        .provider-chips {
+            display: flex;
+            gap: var(--sp-xs);
+            margin-bottom: var(--sp-md);
+        }
+        .provider-chip {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid var(--hairline);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            text-align: center;
+            transition: all .15s;
+            background: var(--canvas);
+        }
+        .provider-chip:hover { border-color: var(--hairline-strong); }
+        .provider-chip.selected {
+            border-color: var(--primary);
+            background: rgba(250,82,15,0.04);
+        }
+        .provider-chip .chip-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .provider-chip .chip-desc {
+            font-size: 12px;
+            color: var(--stone);
+            margin-top: 2px;
+        }
     </style>
 </head>
 <body>
@@ -796,9 +926,15 @@ HTML_TEMPLATE = """
             <span class="logo">A</span>
             Agentic Playwright
         </a>
-        <div class="topnav-status">
-            <span class="dot" id="navDot"></span>
-            <span id="navStatusText">就绪</span>
+        <div class="topnav-status" style="gap: var(--sp-md);">
+            <div style="display:flex;align-items:center;gap:var(--sp-xs);cursor:pointer" onclick="openSetupModal()" title="点击配置 AI 模型">
+                <span class="dot" id="llmDot"></span>
+                <span id="llmStatusText" style="font-size:12px">检查中...</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:var(--sp-xs)">
+                <span class="dot" id="navDot"></span>
+                <span id="navStatusText">就绪</span>
+            </div>
         </div>
     </nav>
 
@@ -1172,6 +1308,167 @@ HTML_TEMPLATE = """
         loadSkills();
         loadScripts();
     </script>
+
+    <!-- ── LLM Setup Modal ── -->
+    <div class="modal-overlay" id="setupModal">
+        <div class="modal-box">
+            <h2>配置 AI 模型</h2>
+            <p class="modal-desc">选择 Provider 并填入 API Key，用于自然语言任务的 LLM 兜底解析。</p>
+
+            <div class="provider-chips">
+                <div class="provider-chip selected" data-provider="openai" onclick="selectProvider('openai')">
+                    <div class="chip-name">OpenAI</div>
+                    <div class="chip-desc">GPT / 兼容 API</div>
+                </div>
+                <div class="provider-chip" data-provider="anthropic" onclick="selectProvider('anthropic')">
+                    <div class="chip-name">Anthropic</div>
+                    <div class="chip-desc">Claude 系列</div>
+                </div>
+            </div>
+
+            <div class="modal-field">
+                <label for="setupApiKey">API Key</label>
+                <input type="password" id="setupApiKey" placeholder="sk-..." autocomplete="off">
+            </div>
+
+            <div class="modal-field">
+                <label for="setupBaseUrl">Base URL</label>
+                <input type="text" id="setupBaseUrl" placeholder="https://api.openai.com/v1">
+                <div class="modal-hint" id="setupBaseUrlHint">可选，兼容 API 可改为其他地址</div>
+            </div>
+
+            <div class="modal-field">
+                <label for="setupModel">Model</label>
+                <input type="text" id="setupModel" placeholder="gpt-4o-mini">
+            </div>
+
+            <div class="modal-error" id="setupError"></div>
+
+            <div class="modal-actions">
+                <button class="btn-modal-ghost" onclick="closeSetupModal()">跳过</button>
+                <button class="btn-modal-primary" id="setupSaveBtn" onclick="saveSetup()">保存并继续</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ── Setup Modal Logic ── */
+        const PROVIDER_DEFAULTS = {
+            openai: {
+                base_url: 'https://api.openai.com/v1',
+                model: 'gpt-4o-mini',
+                base_url_placeholder: 'https://api.openai.com/v1',
+                base_url_hint: '兼容 API 可改为 DeepSeek、本地模型等地址',
+            },
+            anthropic: {
+                base_url: 'https://api.anthropic.com',
+                model: 'claude-haiku-4-5-20251001',
+                base_url_placeholder: 'https://api.anthropic.com',
+                base_url_hint: '通常无需修改',
+            },
+        };
+
+        let selectedProvider = 'openai';
+
+        function selectProvider(provider) {
+            selectedProvider = provider;
+            document.querySelectorAll('.provider-chip').forEach(el => {
+                el.classList.toggle('selected', el.dataset.provider === provider);
+            });
+            const defaults = PROVIDER_DEFAULTS[provider];
+            document.getElementById('setupBaseUrl').placeholder = defaults.base_url_placeholder;
+            document.getElementById('setupBaseUrlHint').textContent = defaults.base_url_hint;
+            document.getElementById('setupModel').placeholder = defaults.model;
+            document.getElementById('setupError').style.display = 'none';
+        }
+
+        function openSetupModal() {
+            document.getElementById('setupModal').classList.add('active');
+            document.getElementById('setupApiKey').focus();
+        }
+
+        function closeSetupModal() {
+            document.getElementById('setupModal').classList.remove('active');
+        }
+
+        async function saveSetup() {
+            const btn = document.getElementById('setupSaveBtn');
+            const errEl = document.getElementById('setupError');
+            const apiKey = document.getElementById('setupApiKey').value.trim();
+
+            if (!apiKey) {
+                errEl.textContent = '请输入 API Key';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '保存中...';
+            errEl.style.display = 'none';
+
+            try {
+                const resp = await fetch('/api/llm/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider: selectedProvider,
+                        api_key: apiKey,
+                        base_url: document.getElementById('setupBaseUrl').value.trim(),
+                        model: document.getElementById('setupModel').value.trim(),
+                    }),
+                });
+                const result = await resp.json();
+
+                if (result.success) {
+                    closeSetupModal();
+                    // 更新导航栏状态
+                    updateLlmStatus(true, result.provider);
+                } else {
+                    errEl.textContent = result.error || '保存失败';
+                    errEl.style.display = 'block';
+                }
+            } catch (e) {
+                errEl.textContent = '请求失败: ' + e.message;
+                errEl.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '保存并继续';
+            }
+        }
+
+        function updateLlmStatus(configured, provider) {
+            const dot = document.getElementById('llmDot');
+            const text = document.getElementById('llmStatusText');
+            if (configured) {
+                dot.classList.add('active');
+                text.textContent = provider || '已配置';
+            } else {
+                dot.classList.remove('active');
+                text.textContent = '未配置';
+            }
+        }
+
+        async function checkLlmStatus() {
+            try {
+                const resp = await fetch('/api/llm/status');
+                const result = await resp.json();
+                updateLlmStatus(result.configured, result.provider);
+                if (!result.configured) {
+                    openSetupModal();
+                }
+            } catch (e) {
+                console.warn('LLM status check failed:', e);
+            }
+        }
+
+        // 页面加载后检查 LLM 配置状态
+        document.addEventListener('DOMContentLoaded', checkLlmStatus);
+
+        // 点击遮罩关闭
+        document.getElementById('setupModal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeSetupModal();
+        });
+    </script>
 </body>
 </html>
 """
@@ -1516,6 +1813,78 @@ def api_set_config():
 
     config.apply_to_env()
     return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# LLM 配置 API
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/llm/status")
+def api_llm_status():
+    """检查 LLM 是否已配置。"""
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    has_openai = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+
+    configured = has_openai or has_anthropic
+    active_provider = "anthropic" if has_anthropic and provider == "anthropic" else "openai" if has_openai else ""
+
+    return jsonify({
+        "configured": configured,
+        "provider": active_provider,
+        "has_openai": has_openai,
+        "has_anthropic": has_anthropic,
+    })
+
+
+@app.route("/api/llm/setup", methods=["POST"])
+def api_llm_setup():
+    """保存 LLM 配置到 .env 文件。"""
+    data = request.json
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"})
+
+    provider = data.get("provider", "openai").lower()
+    api_key = (data.get("api_key") or "").strip()
+    base_url = (data.get("base_url") or "").strip()
+    model = (data.get("model") or "").strip()
+
+    if not api_key:
+        return jsonify({"success": False, "error": "API Key 不能为空"})
+
+    # 根据 provider 设置环境变量和默认值
+    if provider == "anthropic":
+        env_entries = {
+            "LLM_PROVIDER": "anthropic",
+            "ANTHROPIC_API_KEY": api_key,
+            "ANTHROPIC_BASE_URL": base_url or "https://api.anthropic.com",
+            "ANTHROPIC_MODEL": model or "claude-haiku-4-5-20251001",
+        }
+    else:
+        env_entries = {
+            "LLM_PROVIDER": "openai",
+            "OPENAI_API_KEY": api_key,
+            "OPENAI_BASE_URL": base_url or "https://api.openai.com/v1",
+            "OPENAI_MODEL": model or "gpt-4o-mini",
+        }
+
+    # 应用到当前进程
+    for key, value in env_entries.items():
+        os.environ[key] = value
+
+    # 追加写入 .env 文件
+    env_file = _project_root / ".env"
+    try:
+        lines = ["", "# LLM config (auto-saved by web GUI)"]
+        for key, value in env_entries.items():
+            lines.append(f"{key}={value}")
+        with open(env_file, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as exc:
+        return jsonify({"success": False, "error": f"写入 .env 失败: {exc}"})
+
+    return jsonify({"success": True, "provider": provider})
 
 
 def main():

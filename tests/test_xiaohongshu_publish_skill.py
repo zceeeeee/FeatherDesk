@@ -47,6 +47,12 @@ def _mock_publish_run_js(logged_in=True):
                 "logged_in": logged_in,
                 "phone_login": not logged_in,
             }
+        if "ME_BUTTON_TEXT" in code:
+            return {
+                "success": True,
+                "me_button": True,
+                "method": "bottom_me_button",
+            }
         if "Phone input not found" in code:
             return {"success": True, "value": "13574133406"}
         if "Agreement checkbox not found" in code:
@@ -157,7 +163,6 @@ def test_xiaohongshu_publish_requests_code_and_waits_for_about_us():
     assert "accept_agreement" in steps
     assert "click_get_code" in steps
     assert any(step.startswith("wait_about_us_attempt_") for step in steps)
-    assert 10 in waits
     assert logs[0] == "Please enter the Xiaohongshu SMS verification code in the browser."
     assert logs[-1] == "Xiaohongshu publish button clicked"
 

@@ -238,18 +238,19 @@ graph TD
     J --> K[返回结果 + 截图]
 ```
 
-### 意图解析：规则优先 + LLM 兜底
+### 意图解析：技能路由 + 规则 + LLM 兜底
 
-Agent 循环的任务理解采用**混合策略**，兼顾速度和覆盖率：
+Agent 循环的任务理解采用**多级级联策略**，兼顾速度和覆盖率：
 
 ```mermaid
 graph TD
-    A[用户指令] --> B[技能库触发词匹配]
-    B --> C{命中?}
-    C -->|是| D{多个候选?}
-    D -->|无歧义| E[使用最佳技能]
-    D -->|歧义| F[LLM 仲裁选技能]
-    C -->|否| G[ScriptGenerator 规则解析]
+    A[用户指令] --> R[SkillRouter 两阶段路由]
+    R --> S1[Stage 1: 关键词快筛]
+    S1 --> S2{单候选高分?}
+    S2 -->|是| E[使用最佳技能 + 参数化脚本]
+    S2 -->|否/歧义| S3[Stage 2: LLM 精排]
+    S3 --> E
+    R -->|未命中| G[ScriptGenerator 规则解析]
     G --> H{规则命中?}
     H -->|是| I[生成脚本]
     H -->|否| J[LLM 意图解析]
@@ -258,12 +259,21 @@ graph TD
     K -->|否| L[报告失败]
 ```
 
+**SkillRouter 两阶段路由**（`src/core/skill_router.py`）：
+
+| 阶段 | 触发条件 | 方法 | 延迟 |
+|------|---------|------|------|
+| 关键词快筛 | 始终执行 | 触发词 + 示例 token 重叠 + 描述匹配 | ~0ms |
+| LLM 精排 | 多候选 / 歧义 | 发送候选列表给 LLM，返回最佳 skill_id | ~1-2s |
+| 参数化脚本 | 命中后 | 根据 `params` 声明用 regex 从任务中提取参数 | ~0ms |
+
 **触发条件**：
 
 | 情况 | 处理方式 |
 |------|---------|
-| 规则完全匹配 | 直接用规则结果，不调 LLM |
-| 多个技能评分打平（歧义） | LLM 从候选中仲裁 |
+| 关键词单候选高分 | 直接命中，跳过 LLM |
+| 多候选 / 歧义 | LLM 从 Top-5 候选中精排 |
+| 路由器未命中 | 回退到 ScriptGenerator 规则解析 |
 | 规则无匹配 | LLM 解析意图返回结构化 JSON |
 
 **LLM 返回格式**：
@@ -282,9 +292,21 @@ graph TD
 **配置**（`.env`）：
 
 ```env
-OPENAI_API_KEY=sk-your-key          # 必填，未设置时降级到纯规则
-OPENAI_BASE_URL=https://api.openai.com/v1  # 可选，兼容任意 OpenAI API
-OPENAI_MODEL=gpt-4o-mini            # 可选，默认 gpt-4o-mini
+# 切换 provider
+LLM_PROVIDER=openai    # "openai" (默认) | "anthropic"
+
+# OpenAI 兼容 API
+OPENAI_API_KEY=sk-your-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+
+# Anthropic
+ANTHROPIC_API_KEY=sk-ant-your-key
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+
+# 通用参数
+LLM_TEMPERATURE=0
+LLM_MAX_TOKENS=1024
 ```
 
 ## 浏览器管理

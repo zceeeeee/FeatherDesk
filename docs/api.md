@@ -20,6 +20,58 @@
 
 ---
 
+## LLM 配置 API
+
+Web GUI 提供的 LLM 配置接口（非 MCP 工具）。
+
+### GET /api/llm/status
+
+检查 LLM 是否已配置。
+
+**返回**：
+
+```json
+{
+  "configured": true,
+  "provider": "openai",
+  "has_openai": true,
+  "has_anthropic": false
+}
+```
+
+### POST /api/llm/setup
+
+保存 LLM 配置到 `.env` 文件。
+
+**请求**：
+
+```json
+{
+  "provider": "openai",
+  "api_key": "sk-xxx",
+  "base_url": "https://api.openai.com/v1",
+  "model": "gpt-4o-mini"
+}
+```
+
+**返回**：
+
+```json
+{
+  "success": true,
+  "provider": "openai"
+}
+```
+
+**Provider 默认值**：
+
+| Provider | Base URL | Model |
+|----------|----------|-------|
+| `openai` | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| `anthropic` | `https://api.anthropic.com` | `claude-haiku-4-5-20251001` |
+
+---
+
 ## browse_skills
 
 按关键词或 URL 查找技能库中的匹配技能。

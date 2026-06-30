@@ -40,10 +40,17 @@ cp .env.example .env
 编辑 `.env` 文件：
 
 ```bash
-# 必填：至少配置一个 API Key（用于 analyze_page 工具）
-ANTHROPIC_API_KEY=sk-ant-xxx
-# 或
+# LLM Provider: "openai" (默认) | "anthropic"
+LLM_PROVIDER=openai
+
+# OpenAI 兼容 API（支持 DeepSeek、本地模型等）
 OPENAI_API_KEY=sk-xxx
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+
+# 或 Anthropic
+# ANTHROPIC_API_KEY=sk-ant-xxx
+# ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 
 # 可选：浏览器引擎
 # USE_CLOAKBROWSER=false    # true = CloakBrowser 反检测引擎
@@ -53,6 +60,9 @@ OPENAI_API_KEY=sk-xxx
 # LOG_LEVEL=INFO            # DEBUG, INFO, WARNING, ERROR
 # LOG_FORMAT=text           # json 或 text
 ```
+
+!!! tip "首次启动自动引导"
+    如果没有配置 API Key，`browser-agent gui` 和 Web GUI 都会自动弹出引导界面，让你选择 Provider 并输入 API Key。配置会自动保存到 `.env` 文件。
 
 ## 启动服务
 
