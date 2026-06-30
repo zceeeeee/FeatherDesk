@@ -560,6 +560,18 @@ def run_js(code: str) -> Any:
     return page.evaluate(code)
 
 
+def mouse_click(x: float, y: float) -> dict:
+    """Click the current page at viewport coordinates."""
+    page = get_browser_manager().get_page()
+    try:
+        click_x = float(x)
+        click_y = float(y)
+        page.mouse.click(click_x, click_y)
+        return {"success": True, "x": click_x, "y": click_y}
+    except Exception as exc:
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def get_page_url() -> str:
     """获取当前页面 URL。"""
     return get_browser_manager().get_page().url
@@ -679,6 +691,7 @@ def get_controls_exports() -> Dict[str, Any]:
         "screenshot": screenshot,
         # JavaScript
         "run_js": run_js,
+        "mouse_click": mouse_click,
         # Cookie 持久化
         "save_cookies": save_cookies,
         "load_cookies": load_cookies,

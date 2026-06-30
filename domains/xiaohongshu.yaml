@@ -61,6 +61,16 @@ locators:
     xpath:
       - "//*[contains(normalize-space(.), '关于我们')]"
 
+  me_button:
+    css:
+      - "li.user .channel:has-text('我')"
+      - "a[href*='/user/profile/'] .channel:has-text('我')"
+      - "a.bottom-channel .text:has-text('我')"
+      - ".bottom-channel .text:has-text('我')"
+    xpath:
+      - "//*[contains(concat(' ', normalize-space(@class), ' '), ' user ')]//*[normalize-space(.)='我']"
+      - "//a[contains(@href, '/user/profile/')]//*[normalize-space(.)='我']"
+
   text_to_image:
     css:
       - "text=文字配图"
@@ -74,6 +84,8 @@ locators:
 
   publish_content:
     css:
+      - "p.editor-paragraph"
+      - ".editor-paragraph"
       - "textarea[placeholder*='内容']"
       - "textarea[placeholder*='正文']"
       - "textarea[placeholder*='文案']"
@@ -85,17 +97,21 @@ locators:
       - ".ql-editor"
       - ".ProseMirror"
     xpath:
+      - "//p[contains(concat(' ', normalize-space(@class), ' '), ' editor-paragraph ')]"
       - "//textarea[contains(@placeholder, '内容') or contains(@placeholder, '正文') or contains(@placeholder, '文案') or contains(@placeholder, '笔记')]"
       - "//*[@contenteditable='true' or @role='textbox'][contains(@data-placeholder, '内容') or contains(@data-placeholder, '正文') or contains(@data-placeholder, '文案') or contains(@data-placeholder, '笔记')]"
 
   generate_image:
     css:
+      - "span.edit-text-button-text:has-text('生成图片')"
+      - ".edit-text-button-text:has-text('生成图片')"
       - "text=生成图片"
       - "button:has-text('生成图片')"
       - "[role='button']:has-text('生成图片')"
       - "div:has-text('生成图片')"
       - "span:has-text('生成图片')"
     xpath:
+      - "//span[contains(concat(' ', normalize-space(@class), ' '), ' edit-text-button-text ')][contains(normalize-space(.), '生成图片')]"
       - "//*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '生成图片')]"
 
   preview_image:
@@ -130,10 +146,15 @@ locators:
 
   final_publish:
     css:
+      - "xhs-publish-btn[submit-text='发布'][submit-disabled='false']"
+      - "xhs-publish-btn[is-publish='true'][submit-disabled='false']"
+      - "button.ce-btn.bg-red:has-text('发布')"
+      - "button.bg-red:has-text('发布')"
       - "text=发布"
       - "button:has-text('发布')"
       - "[role='button']:has-text('发布')"
       - "div:has-text('发布')"
       - "span:has-text('发布')"
     xpath:
+      - "//xhs-publish-btn[@submit-text='发布' and @submit-disabled='false']"
       - "//*[self::button or @role='button' or self::div or self::span][contains(normalize-space(.), '发布')]"

@@ -66,6 +66,12 @@ steps:
     comment: 等待页面左下角出现“关于我们”，确认登录成功。
     on_error: stop
 
+  - action: wait_for_text
+    target: me_button
+    value: 我
+    comment: 跳转发布页前必须识别到侧边栏或底部导航的“我”，确认账号已登录。
+    on_error: stop
+
   - action: goto
     args:
       url: "{{publish_url}}"
@@ -84,8 +90,8 @@ steps:
 
   - action: wait
     args:
-      seconds: 10
-    comment: 填入文本内容后等待 10 秒，再点击生成图片。
+      seconds: 2
+    comment: 填入文本内容后等待 2 秒，再点击生成图片。
 
   - action: smart_click
     target: generate_image

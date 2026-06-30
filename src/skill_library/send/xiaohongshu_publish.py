@@ -475,6 +475,88 @@ def _wait_for_about_us(run_js_fn, wait_fn, steps, max_wait_seconds, interval_sec
     }
 
 
+def _detect_me_button(run_js_fn):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const ME_BUTTON_TEXT = '\\u6211';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
+  const nodes = Array.from(document.querySelectorAll(
+    'a,button,[role="button"],li,div,span,.channel,.text,.bottom-channel,.user'
+  )).filter(visible).map((el) => {
+    const rect = el.getBoundingClientRect();
+    const text = compactText(el);
+    const profileLink = el.closest('a[href*="/user/profile/"]');
+    const userEntry = el.closest('li.user,.user.side-bar-component');
+    const bottomEntry = el.closest('a.bottom-channel,.bottom-channel.bottom-menu-component');
+    const channelLabel = el.matches('.channel,.text') ||
+      Boolean(el.querySelector('.channel,.text'));
+    const avatar = Boolean((profileLink || el).querySelector('.reds-avatar,.reds-image-container,.reds-img'));
+    return {el, rect, text, profileLink, userEntry, bottomEntry, channelLabel, avatar};
+  }).filter((item) => {
+    const exactMe = item.text === ME_BUTTON_TEXT ||
+      (item.el.matches('.channel,.text') && item.text.includes(ME_BUTTON_TEXT));
+    if (!exactMe) return false;
+    return Boolean(item.profileLink || item.userEntry || item.bottomEntry || item.channelLabel || item.avatar);
+  });
+  if (!nodes.length) {
+    return {success: true, me_button: false, count: 0, url: location.href};
+  }
+  nodes.sort((a, b) => {
+    const score = (item) => {
+      let value = 0;
+      if (item.profileLink) value -= 300;
+      if (item.userEntry) value -= 240;
+      if (item.bottomEntry) value -= 220;
+      if (item.channelLabel) value -= 160;
+      if (item.avatar) value -= 80;
+      value += item.rect.top / 120;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const best = nodes[0];
+  return {
+    success: true,
+    me_button: true,
+    text: best.text,
+    count: nodes.length,
+    profile_href: best.profileLink ? best.profileLink.getAttribute('href') : '',
+    method: best.bottomEntry ? 'bottom_me_button' : 'sidebar_me_button',
+    url: location.href
+  };
+})()
+""",
+    )
+
+
+def _wait_for_me_button(run_js_fn, wait_fn, steps, max_wait_seconds, interval_seconds):
+    attempts = max(1, int(max_wait_seconds / interval_seconds) + 1)
+    for attempt in range(1, attempts + 1):
+        state = _detect_me_button(run_js_fn)
+        steps.append({"step": f"wait_me_button_attempt_{attempt}", "result": state})
+        if state.get("me_button"):
+            return {"success": True, "attempts": attempt, "state": state}
+        if attempt < attempts:
+            steps.append(
+                {
+                    "step": f"wait_before_me_button_attempt_{attempt + 1}",
+                    "result": _safe_call(wait_fn, "", interval_seconds),
+                }
+            )
+    return {
+        "success": False,
+        "requires_manual_login": True,
+        "error": "Timed out waiting for Xiaohongshu Me button before publishing",
+    }
+
+
 def _set_editable(el_var, value_var):
     return f"""
   {{
@@ -496,26 +578,34 @@ def _set_editable(el_var, value_var):
         .replace(/>/g, '&gt;');
       el.innerHTML = String(value).split('\\n').map((line) => escapeHtml(line) || '<br>').join('<br>');
     }}
-    try {{
-      el.dispatchEvent(new InputEvent('beforeinput', {{
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: value
-      }}));
-    }} catch (error) {{}}
-    try {{
-      el.dispatchEvent(new InputEvent('input', {{
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: value
-      }}));
-    }} catch (error) {{
-      el.dispatchEvent(new Event('input', {{bubbles: true}}));
+    const dispatchEditableEvents = (target) => {{
+      try {{
+        target.dispatchEvent(new InputEvent('beforeinput', {{
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: value
+        }}));
+      }} catch (error) {{}}
+      try {{
+        target.dispatchEvent(new InputEvent('input', {{
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: value
+        }}));
+      }} catch (error) {{
+        target.dispatchEvent(new Event('input', {{bubbles: true}}));
+      }}
+      target.dispatchEvent(new Event('change', {{bubbles: true}}));
+      target.dispatchEvent(new Event('blur', {{bubbles: true}}));
+    }};
+    const eventTargets = [el];
+    const editableParent = el.closest('[contenteditable="true"],[role="textbox"],.ql-editor,.ProseMirror,[class*="editor" i]');
+    if (editableParent && editableParent !== el) {{
+      eventTargets.push(editableParent);
     }}
-    el.dispatchEvent(new Event('change', {{bubbles: true}}));
-    el.dispatchEvent(new Event('blur', {{bubbles: true}}));
+    eventTargets.forEach(dispatchEditableEvents);
   }};
   setEditable({el_var}, {value_var});
   }}
@@ -602,18 +692,20 @@ def _fill_publish_content(run_js_fn, content):
   const denied = (text) => /(\\u641c\\u7d22|search|\\u9a8c\\u8bc1\\u7801|code|\\u5bc6\\u7801|password|\\u624b\\u673a|phone|mobile|login|\\u6807\\u7b7e|tag|\\u8bdd\\u9898|topic)/i.test(text);
   const goodLabel = (text) => /(\\u5185\\u5bb9|\\u6b63\\u6587|\\u6587\\u6848|\\u7b14\\u8bb0|\\u63cf\\u8ff0|\\u8bf4\\u70b9|\\u8f93\\u5165|\\u751f\\u6210|prompt|content|caption|description|editor)/i.test(text);
   const candidates = Array.from(document.querySelectorAll(
-    'textarea,[contenteditable="true"],[role="textbox"],input,.ql-editor,.ProseMirror,[class*="editor" i]'
+    'p.editor-paragraph,.editor-paragraph,textarea,[contenteditable="true"],[role="textbox"],input,.ql-editor,.ProseMirror,[class*="editor" i]'
   )).filter(visible).map((el) => {
     const rect = el.getBoundingClientRect();
     const label = labelOf(el);
     const nearText = compactText(el.parentElement || el);
-    return {el, rect, label, nearText};
+    const editorParagraph = el.matches('p.editor-paragraph,.editor-paragraph');
+    return {el, rect, label, nearText, editorParagraph};
   }).filter((item) => {
     const text = `${item.label} ${item.nearText}`;
     if (denied(text)) return false;
     const type = (item.el.type || '').toLowerCase();
     if (item.el.tagName === 'INPUT' && type && !['text', 'search'].includes(type)) return false;
-    return goodLabel(text) ||
+    return item.editorParagraph ||
+      goodLabel(text) ||
       item.el.tagName === 'TEXTAREA' ||
       item.el.isContentEditable ||
       item.rect.height >= 80;
@@ -625,6 +717,7 @@ def _fill_publish_content(run_js_fn, content):
     const score = (item) => {
       const text = `${item.label} ${item.nearText}`;
       let value = 0;
+      if (item.editorParagraph) value -= 900;
       if (goodLabel(text)) value -= 500;
       if (item.el.tagName === 'TEXTAREA') value -= 350;
       if (item.el.isContentEditable) value -= 260;
@@ -670,13 +763,17 @@ def _click_generate_image(run_js_fn):
       const text = compactText(el);
       const lower = rect.top > window.innerHeight * 0.35;
       const clickable = Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON';
+      const editTextButton = Boolean(
+        el.matches('span.edit-text-button-text,.edit-text-button-text') ||
+        el.closest('span.edit-text-button-text,.edit-text-button-text')
+      );
       const colored = /rgb\\(\\s*(220|230|240|250|255)\\s*,\\s*(0|20|40|50|60|70|80|90)\\s*,\\s*(50|60|70|80|90|100|110|120)\\s*\\)|#?ff2442|#?fe2c55|#?1890ff/i.test(
         `${style.backgroundColor} ${style.color} ${style.borderColor}`
       );
-      return {el, rect, text, lower, clickable, colored};
+      return {el, rect, text, lower, clickable, colored, editTextButton};
     }).filter((item) => {
       if (!item.text.includes(GENERATE_IMAGE_TEXT)) return false;
-      return item.text === GENERATE_IMAGE_TEXT || item.text.length <= 20 || item.clickable;
+      return item.editTextButton || item.text === GENERATE_IMAGE_TEXT || item.text.length <= 20 || item.clickable;
     });
   if (!nodes.length) {
     return {success: false, error: 'Generate-image button not found'};
@@ -684,6 +781,7 @@ def _click_generate_image(run_js_fn):
   nodes.sort((a, b) => {
     const score = (item) => {
       let value = item.rect.width * item.rect.height / 1000;
+      if (item.editTextButton) value -= 1000;
       if (item.text === GENERATE_IMAGE_TEXT) value -= 500;
       if (item.lower) value -= 180;
       if (item.colored) value -= 140;
@@ -701,7 +799,7 @@ def _click_generate_image(run_js_fn):
   return {
     success: true,
     text: nodes[0].text,
-    method: nodes[0].lower ? 'lower_generate_image_button' : 'generate_image_button'
+    method: nodes[0].editTextButton ? 'edit_text_generate_image_button' : (nodes[0].lower ? 'lower_generate_image_button' : 'generate_image_button')
   };
 })()
 """,
@@ -827,7 +925,122 @@ def _detect_image_edit(run_js_fn):
     )
 
 
-def _click_final_publish(run_js_fn):
+def _click_final_publish(run_js_fn, mouse_click_fn=None):
+    host_result = _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const FINAL_PUBLISH_TEXT = '\\u53d1\\u5e03';
+  const XHS_PUBLISH_HOST = 'xhs-publish-btn';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const hosts = Array.from(document.querySelectorAll(XHS_PUBLISH_HOST))
+    .filter(visible)
+    .filter((el) => {
+      const submitText = (el.getAttribute('submit-text') || '').trim();
+      return submitText.includes(FINAL_PUBLISH_TEXT) ||
+        el.getAttribute('is-publish') === 'true';
+    });
+  if (!hosts.length) {
+    return {success: false, has_host: false, error: 'XHS publish host not found'};
+  }
+  const host = hosts.find((el) => el.getAttribute('submit-disabled') !== 'true') || hosts[0];
+  if (host.getAttribute('submit-disabled') === 'true' || host.hasAttribute('disabled')) {
+    return {success: false, has_host: true, error: 'XHS publish host is disabled'};
+  }
+  host.scrollIntoView({block: 'end', inline: 'center'});
+  const rect = host.getBoundingClientRect();
+  const hasSaveButton = host.getAttribute('is-save-draft') !== 'false' &&
+    Boolean((host.getAttribute('save-text') || '').trim());
+  const redButtonOffset = hasSaveButton ? 72 : 0;
+  const x = Math.max(rect.left + 8, Math.min(rect.right - 8, rect.left + rect.width / 2 + redButtonOffset));
+  const y = Math.max(rect.top + 8, Math.min(rect.bottom - 8, rect.top + rect.height / 2));
+  return {
+    success: true,
+    has_host: true,
+    x,
+    y,
+    text: host.getAttribute('submit-text') || FINAL_PUBLISH_TEXT,
+    method: 'xhs_publish_host_coordinate'
+  };
+})()
+""",
+    )
+    if host_result.get("has_host"):
+        native_result = None
+        if host_result.get("success") and mouse_click_fn is not None:
+            native_result = _safe_call(
+                mouse_click_fn,
+                {"success": False, "error": "mouse click failed"},
+                host_result.get("x"),
+                host_result.get("y"),
+            )
+            if not isinstance(native_result, dict):
+                native_result = {"success": bool(native_result), "result": native_result}
+            if native_result.get("success"):
+                result = dict(host_result)
+                result["click_result"] = native_result
+                return result
+
+        if host_result.get("success"):
+            fallback_result = _run_js_dict(
+                run_js_fn,
+                """
+(() => {
+  const x = CLICK_X;
+  const y = CLICK_Y;
+  const host = document.querySelector('xhs-publish-btn[submit-text*="\\u53d1\\u5e03"],xhs-publish-btn[is-publish="true"]');
+  const target = document.elementFromPoint(x, y) || host;
+  if (!target) {
+    return {success: false, error: 'No target at XHS publish coordinates'};
+  }
+  const dispatch = (el, type) => {
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: type === 'mouseup' || type === 'pointerup' || type === 'click' ? 0 : 1
+    };
+    try {
+      if (type.startsWith('pointer') && window.PointerEvent) {
+        el.dispatchEvent(new PointerEvent(type, options));
+      } else {
+        el.dispatchEvent(new MouseEvent(type, options));
+      }
+    } catch (error) {
+      el.dispatchEvent(new Event(type, {bubbles: true, cancelable: true, composed: true}));
+    }
+  };
+  ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => dispatch(target, type));
+  return {
+    success: true,
+    has_host: true,
+    text: host ? host.getAttribute('submit-text') : '',
+    method: 'xhs_publish_host_event_fallback',
+    target_tag: target.tagName,
+    target_class: String(target.className || '')
+  };
+})()
+"""
+                .replace("CLICK_X", str(host_result.get("x") or 0))
+                .replace("CLICK_Y", str(host_result.get("y") or 0)),
+            )
+            if fallback_result.get("success"):
+                return fallback_result
+
+        result = dict(host_result)
+        result["success"] = False
+        if native_result is not None:
+            result["click_result"] = native_result
+        return result
+
     return _run_js_dict(
         run_js_fn,
         """
@@ -846,21 +1059,26 @@ def _click_final_publish(run_js_fn):
       const text = compactText(el);
       const lower = rect.top > window.innerHeight * 0.45;
       const clickable = Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON';
+      const ceRed = Boolean(
+        el.matches('button.ce-btn.bg-red,.ce-btn.bg-red') ||
+        el.closest('button.ce-btn.bg-red,.ce-btn.bg-red')
+      );
       const red = /rgb\\(\\s*(220|230|240|250|255)\\s*,\\s*(0|20|30|40|50|60|70|80|90)\\s*,\\s*(40|50|60|70|80|90|100|110|120)\\s*\\)|#?ff2442|#?fe2c55/i.test(
         `${style.backgroundColor} ${style.color} ${style.borderColor}`
       );
-      return {el, rect, text, lower, clickable, red};
+      return {el, rect, text, lower, clickable, red, ceRed};
     }).filter((item) => {
       if (!item.text.includes(FINAL_PUBLISH_TEXT)) return false;
       if (/\\u5b9a\\u65f6|\\u8bbe\\u7f6e|\\u58f0\\u660e|\\u53d1\\u5e03\\u8bbe\\u7f6e/.test(item.text)) return false;
-      return item.text === FINAL_PUBLISH_TEXT || item.text.length <= 12 || item.clickable;
+      return item.ceRed || item.text === FINAL_PUBLISH_TEXT || item.text.length <= 12 || item.clickable;
     });
   if (!nodes.length) {
     return {success: false, error: 'Final publish button not found'};
   }
   nodes.sort((a, b) => {
-    const score = (item) => {
+      const score = (item) => {
       let value = item.rect.width * item.rect.height / 1000;
+      if (item.ceRed) value -= 1000;
       if (item.text === FINAL_PUBLISH_TEXT) value -= 500;
       if (item.lower) value -= 220;
       if (item.red) value -= 160;
@@ -878,7 +1096,7 @@ def _click_final_publish(run_js_fn):
   return {
     success: true,
     text: nodes[0].text,
-    method: nodes[0].lower ? 'lower_publish_button' : 'publish_button'
+    method: nodes[0].ceRed ? 'ce_red_publish_button' : (nodes[0].lower ? 'lower_publish_button' : 'publish_button')
   };
 })()
 """,
@@ -903,6 +1121,17 @@ def _retry(step_name, action_fn, steps, wait_fn, attempts, interval):
     return result
 
 
+def _resolve_mouse_click(mouse_click_fn):
+    if mouse_click_fn is not None:
+        return mouse_click_fn
+    if _controls is not None and hasattr(_controls, "mouse_click"):
+        return _controls.mouse_click
+    try:
+        return mouse_click
+    except Exception:
+        return None
+
+
 def run(
     content,
     phone_number=None,
@@ -916,6 +1145,7 @@ def run(
     wait_fn=None,
     get_url_fn=None,
     get_text_fn=None,
+    mouse_click_fn=None,
     log_fn=None,
 ):
     """Log in to Xiaohongshu if needed, fill image-text content, and generate."""
@@ -929,6 +1159,7 @@ def run(
         get_url_fn = _controls.get_page_url if _controls is not None else get_url
     if get_text_fn is None:
         get_text_fn = _controls.get_page_text if _controls is not None else get_text
+    mouse_click_fn = _resolve_mouse_click(mouse_click_fn)
 
     log_fn = _resolve_log(log_fn)
     steps = []
@@ -1007,6 +1238,22 @@ def run(
                     "steps": steps,
                 }
 
+        me_result = _wait_for_me_button(
+            run_js_fn,
+            wait_fn,
+            steps,
+            max_wait_seconds=max_wait_seconds,
+            interval_seconds=2,
+        )
+        steps.append({"step": "login_me_button_confirmation", "result": me_result})
+        if not me_result.get("success"):
+            return {
+                "success": False,
+                "requires_manual_login": True,
+                "error": "Please complete Xiaohongshu login before opening publish page",
+                "steps": steps,
+            }
+
         steps.append({"step": "navigate_publish_editor", "result": goto_fn(publish_url)})
         steps.append({"step": "wait_after_publish_navigation", "result": _safe_call(wait_fn, "", 2)})
 
@@ -1041,7 +1288,7 @@ def run(
                 "steps": steps,
             }
         steps.append(
-            {"step": "wait_after_fill_publish_content", "result": _safe_call(wait_fn, "", 10)}
+            {"step": "wait_after_fill_publish_content", "result": _safe_call(wait_fn, "", 2)}
         )
 
         generate_result = _retry(
@@ -1107,7 +1354,7 @@ def run(
 
         publish_result = _retry(
             "click_final_publish",
-            lambda: _click_final_publish(run_js_fn),
+            lambda: _click_final_publish(run_js_fn, mouse_click_fn),
             steps,
             wait_fn,
             attempts=5,
