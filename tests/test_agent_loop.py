@@ -363,6 +363,15 @@ class TestGitHubLoginScript:
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_search"
 
+    def test_router_defaults_generic_publish_content_to_xiaohongshu_publish(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("发布内容“测试内容”")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/xiaohongshu_publish"
+        assert decision.script == ""
+
     def test_registry_fallback_builds_xiaohongshu_article_publish_script(self):
         task = "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”。"
         registry = SkillRegistry(library_dir="src/skill_library")
@@ -399,6 +408,45 @@ class TestGitHubLoginScript:
         assert 'video_path="D:\\\\xxx\\\\clip.mp4"' in script
         assert 'title="视频标题"' in script
         assert 'run("视频正文"' in script
+
+    def test_build_xiaohongshu_publish_script_passes_style_and_schedule(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(content=None, **kwargs):\n    log(content)"
+
+        script = agent._build_skill_script(
+            source,
+            "小红书发布短文，内容是“测试内容”，样式是弥散，定时发布 2026-07-01 11:17",
+            "domain/xiaohongshu_publish",
+        )
+
+        assert 'mode="text_to_image"' in script
+        assert 'cover_style="弥散"' in script
+        assert "enable_schedule=True" in script
+        assert 'schedule_time="2026-07-01 11:17"' in script
+
+    def test_router_routes_xiaohongshu_comment_to_comment_fallback(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route(
+            "在小红书https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b下发布评论，内容是“dwfebfer”"
+        )
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/xiaohongshu_comment"
+        assert decision.script == ""
+
+    def test_build_xiaohongshu_comment_script_passes_url_and_text(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(comment_text, note_url=None):\n    log(comment_text)"
+
+        script = agent._build_skill_script(
+            source,
+            "在小红书https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b?xsec_token=abc&xsec_source=pc_user下发布评论，内容是“dwfebfer”",
+            "domain/xiaohongshu_comment",
+        )
+
+        assert 'run("dwfebfer", note_url=' in script
+        assert "https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b?xsec_token=abc&xsec_source=pc_user" in script
 
     def test_build_douyin_login_script_passes_phone_number(self):
         agent = AgentLoop(max_steps=3)

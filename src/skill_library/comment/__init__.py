@@ -1,1 +1,1 @@
-"""Bilibili comment skill module."""
+"""Comment skill modules."""

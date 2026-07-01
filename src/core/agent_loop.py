@@ -686,12 +686,35 @@ class AgentLoop:
                 f"{json.dumps(comment_text, ensure_ascii=False)})"
             )
 
+        if skill_id == "domain/xiaohongshu_comment":
+            comment_text = self._extract_comment_text(task)
+            note_url = self._extract_xiaohongshu_note_url(task)
+            missing = []
+            if not note_url:
+                missing.append("note url")
+            if not comment_text:
+                missing.append("comment text")
+            if missing:
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('Xiaohongshu comment requires {', '.join(missing)}')"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"_result = run({json.dumps(comment_text, ensure_ascii=False)}, "
+                f"note_url={json.dumps(note_url, ensure_ascii=False)})\n"
+                "if isinstance(_result, dict) and not _result.get('success', True):\n"
+                "    raise RuntimeError(_result.get('error') or str(_result))"
+            )
+
         if skill_id == "domain/xiaohongshu_publish":
             phone_number = self._extract_phone_number(task)
             image_path = self._extract_xiaohongshu_media_path(task, "image")
             video_path = self._extract_xiaohongshu_media_path(task, "video")
             mode = self._extract_xiaohongshu_publish_mode(task, image_path, video_path)
             title, content = self._extract_xiaohongshu_publish_fields(task)
+            cover_style = self._extract_xiaohongshu_cover_style(task)
+            enable_schedule, schedule_time = self._extract_xiaohongshu_schedule(task)
             missing = []
             if mode in {"text_to_image", "article"} and not content:
                 missing.append("content")
@@ -714,6 +737,12 @@ class AgentLoop:
                 kwargs.append(f"video_path={json.dumps(video_path, ensure_ascii=False)}")
             if title:
                 kwargs.append(f"title={json.dumps(title, ensure_ascii=False)}")
+            if cover_style:
+                kwargs.append(f"cover_style={json.dumps(cover_style, ensure_ascii=False)}")
+            if enable_schedule:
+                kwargs.append("enable_schedule=True")
+            if schedule_time:
+                kwargs.append(f"schedule_time={json.dumps(schedule_time, ensure_ascii=False)}")
             call_args = ", ".join(args + kwargs)
             return (
                 f"{source_code}\n\n# 自动调用\n"
@@ -1015,6 +1044,61 @@ class AgentLoop:
         return title, body
 
     @staticmethod
+    def _extract_xiaohongshu_cover_style(task: str) -> str | None:
+        styles = ["基础", "弥散", "涂写", "光影", "手写", "备忘", "边框", "便签", "涂鸦", "简约"]
+        for style in styles:
+            if style in task:
+                return style
+        return None
+
+    @staticmethod
+    def _extract_xiaohongshu_schedule(task: str) -> tuple[bool, str | None]:
+        import re
+
+        enable = bool(re.search(r"(定时发布|定时|预约发布|scheduled)", task, re.IGNORECASE))
+        if not enable:
+            return False, None
+
+        patterns = [
+            r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})(?:日)?\s+(\d{1,2})[:：点](\d{1,2})",
+            r"(\d{1,2})月(\d{1,2})日?\s*(\d{1,2})[:：点](\d{1,2})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, task)
+            if not match:
+                continue
+            groups = match.groups()
+            if len(groups) == 5:
+                year, month, day, hour, minute = groups
+            else:
+                from datetime import datetime
+
+                year = str(datetime.now().year)
+                month, day, hour, minute = groups
+            return True, (
+                f"{int(year):04d}-{int(month):02d}-{int(day):02d} "
+                f"{int(hour):02d}:{int(minute):02d}"
+            )
+
+        return True, None
+
+    @staticmethod
+    def _extract_xiaohongshu_note_url(task: str) -> str | None:
+        import re
+
+        match = re.search(
+            r"(https?://(?:www\.)?xiaohongshu\.com/[A-Za-z0-9:/?#@!$&()*+,;=%._~%-]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        url = match.group(1)
+        url = re.split(r"(?=下?(?:发布|发表|发送|发)?(?:评论|留言|回复))", url, maxsplit=1)[0]
+        url = re.sub(r"[.,;:，。；：！!?）)>]+$", "", url)
+        return url or None
+
+    @staticmethod
     def _extract_comment_text(task: str) -> str | None:
         """从任务描述中提取评论文本。"""
         import re
@@ -1029,6 +1113,7 @@ class AgentLoop:
             return text or None
 
         comment_patterns = [
+            r"(?:评论内容|留言内容|回复内容|内容)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
             r"(?:发布|发表|发送|发)?(?:评论|留言|回复)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
             r"['\"“‘](.+?)['\"”’]\s*(?:的)?(?:评论|留言|回复)",
             r"(?:评论|留言|回复|说|内容)\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?(.+?)(?=(?:在|然后|并且|接着)|$)",

@@ -32,6 +32,18 @@ DEFAULT_ARTICLE_PUBLISH_URL = (
     "https://creator.xiaohongshu.com/publish/publish"
     "?source=official&from=tab_switch&target=article"
 )
+XIAOHONGSHU_COVER_STYLES = (
+    "基础",
+    "弥散",
+    "涂写",
+    "光影",
+    "手写",
+    "备忘",
+    "边框",
+    "便签",
+    "涂鸦",
+    "简约",
+)
 
 
 def _default_log(message):
@@ -94,6 +106,16 @@ def _optional_text(value):
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalize_cover_style(cover_style):
+    text = _optional_text(cover_style)
+    if not text:
+        return "基础"
+    for style in XIAOHONGSHU_COVER_STYLES:
+        if style == text or style in text:
+            return style
+    return "基础"
 
 
 def _detect_blocked(get_url_fn, get_text_fn):
@@ -860,6 +882,144 @@ def _detect_preview_image(run_js_fn):
   };
 })()
 """,
+    )
+
+
+def _click_cover_style(run_js_fn, cover_style=None):
+    style_name = _normalize_cover_style(cover_style)
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const COVER_STYLE_NAME = __COVER_STYLE__;
+  const FALLBACK_STYLE_NAME = '\\u57fa\\u7840';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
+  const items = Array.from(document.querySelectorAll('.cover-item-container'))
+    .filter(visible)
+    .map((el, index) => {
+      const nameEl = el.querySelector('.cover-name');
+      const card = el.querySelector('.cover-item') || el;
+      const name = compactText(nameEl || el);
+      const active = /active|selected|checked/i.test(String(card.className || '')) ||
+        /active|selected|checked/i.test(String(el.className || ''));
+      return {el, card, name, active, index};
+    })
+    .filter((item) => item.name);
+  if (!items.length) {
+    return {
+      success: true,
+      skipped: true,
+      selected_style: COVER_STYLE_NAME,
+      error: 'Xiaohongshu cover style list not found'
+    };
+  }
+  const target = items.find((item) => item.name === COVER_STYLE_NAME) ||
+    items.find((item) => item.name === FALLBACK_STYLE_NAME) ||
+    items[0];
+  target.card.scrollIntoView({block: 'center', inline: 'center'});
+  if (!target.active) {
+    target.card.click();
+  }
+  return {
+    success: true,
+    selected_style: target.name,
+    requested_style: COVER_STYLE_NAME,
+    method: target.active ? 'cover_style_already_active' : 'click_cover_style'
+  };
+})()
+""".replace("__COVER_STYLE__", _js_string(style_name)),
+    )
+
+
+def _enable_scheduled_publish(run_js_fn):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const SCHEDULE_SWITCH_TEXT = '\\u5b9a\\u65f6\\u53d1\\u5e03';
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
+  const cards = Array.from(document.querySelectorAll(
+    '.post-time-switch-container,.custom-switch-card,[class*="switch" i],div,span'
+  )).filter(visible).filter((el) => compactText(el).includes(SCHEDULE_SWITCH_TEXT));
+  if (!cards.length) {
+    return {success: false, error: 'Xiaohongshu scheduled publish switch not found'};
+  }
+  const card = cards.find((el) => el.querySelector('input[type="checkbox"]')) || cards[0];
+  const checkbox = card.querySelector('input[type="checkbox"]') ||
+    card.closest('.post-time-switch-container,.custom-switch-card,[class*="switch" i]')?.querySelector('input[type="checkbox"]');
+  const checked = () => Boolean(
+    checkbox && (
+      checkbox.checked ||
+      /(^|\\s)checked(\\s|$)/.test(String(checkbox.closest('.d-switch-simulator')?.className || ''))
+    )
+  );
+  if (checked()) {
+    return {success: true, checked: true, method: 'schedule_switch_already_checked'};
+  }
+  const clickable = checkbox?.closest('.d-switch,.d-switch-simulator,.custom-switch-switch,.custom-switch-card') ||
+    card.closest('.custom-switch-card,.post-time-switch-container') ||
+    card;
+  clickable.scrollIntoView({block: 'center', inline: 'center'});
+  clickable.click();
+  if (checkbox) {
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('input', {bubbles: true}));
+    checkbox.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  return {success: true, checked: checked() || true, method: 'click_schedule_switch'};
+})()
+""",
+    )
+
+
+def _fill_schedule_time(run_js_fn, schedule_time):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const SCHEDULE_TIME_TEXT = __SCHEDULE_TIME__;
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style && style.visibility !== 'hidden' && style.display !== 'none' &&
+      (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const inputs = Array.from(document.querySelectorAll(
+    '.post-time-switch-container input.d-text,.d-datepicker input.d-text,input.d-text'
+  )).filter((el) => visible(el) && (el.type || '').toLowerCase() !== 'checkbox');
+  if (!inputs.length) {
+    return {success: false, error: 'Xiaohongshu scheduled publish time input not found'};
+  }
+  const target = inputs[0];
+  target.scrollIntoView({block: 'center', inline: 'center'});
+  target.focus();
+  const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+  if (descriptor && descriptor.set) {
+    descriptor.set.call(target, SCHEDULE_TIME_TEXT);
+  } else {
+    target.value = SCHEDULE_TIME_TEXT;
+  }
+  target.dispatchEvent(new Event('input', {bubbles: true}));
+  target.dispatchEvent(new Event('change', {bubbles: true}));
+  target.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter'}));
+  target.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter'}));
+  target.blur();
+  return {
+    success: (target.value || '').includes(SCHEDULE_TIME_TEXT),
+    value: target.value || '',
+    method: 'fill_schedule_time'
+  };
+})()
+""".replace("__SCHEDULE_TIME__", _js_string(schedule_time)),
     )
 
 
@@ -1776,6 +1936,9 @@ def run(
     image_path=None,
     video_path=None,
     mode=None,
+    cover_style=None,
+    enable_schedule=False,
+    schedule_time=None,
     login_url=DEFAULT_LOGIN_URL,
     publish_url=DEFAULT_IMAGE_PUBLISH_URL,
     max_wait_seconds=300,
@@ -1799,6 +1962,9 @@ def run(
         image_path: Local image path for image_upload mode.
         video_path: Local video path for video mode.
         mode: Force a specific mode (text_to_image, image_upload, video, article).
+        cover_style: Card style for text-to-image preview. Defaults to 基础.
+        enable_schedule: Whether to turn on scheduled publishing.
+        schedule_time: Optional scheduled publish time, e.g. 2026-07-01 11:17.
         login_url: Login page URL.
         publish_url: Override publish URL.
         max_wait_seconds: Max wait time for login.
@@ -2180,6 +2346,21 @@ def run(
                     "steps": steps,
                 }
 
+            cover_style_result = _retry(
+                "select_cover_style",
+                lambda: _click_cover_style(run_js_fn, cover_style),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not cover_style_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to select Xiaohongshu cover style",
+                    "steps": steps,
+                }
+
             next_result = _retry(
                 "click_next_step",
                 lambda: _click_next_step(run_js_fn),
@@ -2211,6 +2392,37 @@ def run(
                     "steps": steps,
                 }
 
+        if enable_schedule or schedule_time:
+            schedule_result = _retry(
+                "enable_scheduled_publish",
+                lambda: _enable_scheduled_publish(run_js_fn),
+                steps,
+                wait_fn,
+                attempts=5,
+                interval=1,
+            )
+            if not schedule_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Failed to enable Xiaohongshu scheduled publish",
+                    "steps": steps,
+                }
+            if schedule_time:
+                fill_schedule_result = _retry(
+                    "fill_schedule_time",
+                    lambda: _fill_schedule_time(run_js_fn, schedule_time),
+                    steps,
+                    wait_fn,
+                    attempts=5,
+                    interval=1,
+                )
+                if not fill_schedule_result.get("success"):
+                    return {
+                        "success": False,
+                        "error": "Failed to fill Xiaohongshu scheduled publish time",
+                        "steps": steps,
+                    }
+
         publish_result = _retry(
             "click_final_publish",
             lambda: _click_final_publish(run_js_fn, mouse_click_fn),
@@ -2232,6 +2444,9 @@ def run(
             "mode": requested_mode,
             "content": publish_content,
             "phone_number": phone,
+            "cover_style": _normalize_cover_style(cover_style),
+            "scheduled": bool(enable_schedule or schedule_time),
+            "schedule_time": schedule_time,
             "url": _safe_call(get_url_fn, ""),
             "steps": steps,
             "message": f"Xiaohongshu {requested_mode} publish completed, publish button clicked.",
