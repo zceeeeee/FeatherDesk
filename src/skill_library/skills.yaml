@@ -353,11 +353,19 @@ skills:
       - "小红书上传"
       - "小红书图文"
       - "小红书笔记"
+      - "小红书发帖"
+      - "小红书发布帖子"
+      - "小红书发布短文"
       - "小红书文章"
       - "小红书长文"
       - "小红书视频"
       - "小红书投稿"
+      - "发布"
       - "发布图文"
+      - "发布短文"
+      - "发帖"
+      - "发布帖子"
+      - "发布内容"
       - "发布笔记"
       - "发布文章"
       - "发布长文"
@@ -388,6 +396,7 @@ skills:
       - "帮我发一个小红书图文"
       - "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”"
       - "小红书上传视频，视频地址是 \"D:\\xxx\\clip.mp4\"，标题是“视频标题”，正文是“视频正文”"
+      - "小红书发布短文，内容是“今天的穿搭灵感”，样式是弥散，定时发布 2026-07-01 11:17"
     params:
       keyword:
         type: quoted
@@ -400,6 +409,48 @@ skills:
         type: phone
         required: false
         description: "手机号码（登录用，可选）"
+      cover_style:
+        type: quoted
+        required: false
+        description: "文字配图卡片样式，未指定或无效时默认基础"
+      enable_schedule:
+        type: boolean
+        required: false
+        description: "用户提到定时发布时启用"
+      schedule_time:
+        type: quoted
+        required: false
+        description: "定时发布时间，例如 2026-07-01 11:17"
+    confirm_before_run: true
+
+  - id: "domain/xiaohongshu_comment"
+    name: "小红书评论"
+    type: "domain"
+    triggers:
+      - "小红书评论"
+      - "小红书 评论"
+      - "小红书发布评论"
+      - "小红书发评论"
+      - "小红书留言"
+      - "发布评论"
+      - "发评论"
+      - "评论"
+      - "留言"
+      - "回复"
+    url_patterns: ["xiaohongshu.com/explore", "www.xiaohongshu.com/explore", "xiaohongshu.com"]
+    description: "先进入小红书登录页确认是否登录，未登录则等待用户完成登录，再打开用户给定的小红书笔记链接，填写评论内容并点击发送"
+    version: "1.0.0"
+    examples:
+      - "在小红书 https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b 下发布评论，内容是“dwfebfer”"
+    params:
+      comment_text:
+        type: quoted
+        required: true
+        description: "评论内容"
+      note_url:
+        type: url
+        required: true
+        description: "小红书笔记 URL"
     confirm_before_run: true
 
   - id: "domain/weibo_search"
@@ -646,6 +697,10 @@ sources:
 
   - id: "domain/xiaohongshu_publish"
     file: "send/xiaohongshu_publish.py"
+    entry: "run"
+
+  - id: "domain/xiaohongshu_comment"
+    file: "comment/xiaohongshu_comment.py"
     entry: "run"
 
   - id: "domain/weibo_search"

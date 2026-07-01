@@ -1,7 +1,7 @@
 id: xiaohongshu_publish
 name: 小红书发布
 type: domain
-description: 小红书发布功能，支持三种模式：上传图文（文字配图/上传图片）、上传视频、写长文
+description: 小红书发布功能，支持文字配图/上传图片、上传视频、写长文；文字配图可选择卡片样式，发布前可按需定时发布。
 version: "1.1.0"
 
 triggers:
@@ -13,6 +13,10 @@ triggers:
   # Upload image triggers
   - 上传图文
   - 上传图片
+  - 发布图文
+  - 发布短文
+  - 发帖
+  - 发布帖子
   - 图片地址
   # Upload video triggers
   - 上传视频
@@ -34,7 +38,15 @@ triggers:
   - 文字配图
   - 生成图片
   - 预览图片
+  - 样式
+  - 基础
+  - 弥散
+  - 涂写
+  - 光影
+  - 手写
+  - 备忘
   - 图片编辑
+  - 定时发布
   - 下一步
   - 新的创作
   - 一键排版
@@ -80,6 +92,18 @@ parameters:
       - image_upload: 上传图片模式（提供图片地址时）
       - video: 上传视频模式（提供视频地址时）
       - article: 写长文模式（触发词包含"长文"/"文章"/"小说"时）
+  cover_style:
+    type: string
+    required: false
+    description: 文字配图预览页要选择的卡片样式，可选基础、弥散、涂写、光影、手写、备忘、边框、便签、涂鸦、简约；未给出或未命中时默认基础。
+  enable_schedule:
+    type: boolean
+    required: false
+    description: 用户提到定时发布时启用。
+  schedule_time:
+    type: string
+    required: false
+    description: 定时发布时间，例如 2026-07-01 11:17；用户未给出具体时间则不填写。
   publish_url:
     type: string
     required: false
@@ -141,6 +165,12 @@ steps:
     comment: text_to_image 模式点击"生成图片"。
     on_error: continue
 
+  - action: smart_click
+    target: cover_style
+    value: "{{cover_style}}"
+    comment: 出现"预览图片"后选择卡片样式；未指定或未命中时默认基础。
+    on_error: continue
+
   # ============== 上传图片模式 ==============
   - action: smart_click
     target: upload_image
@@ -180,6 +210,18 @@ steps:
   - action: smart_click
     target: next_step
     comment: 图片预览/长文排版后点击"下一步"。
+    on_error: continue
+
+  - action: smart_click
+    target: scheduled_publish
+    value: "{{enable_schedule}}"
+    comment: 用户要求定时发布时点击"定时发布"开关。
+    on_error: continue
+
+  - action: smart_fill
+    target: schedule_time
+    value: "{{schedule_time}}"
+    comment: 用户给出具体定时发布时间时填写日期时间。
     on_error: continue
 
   - action: smart_click

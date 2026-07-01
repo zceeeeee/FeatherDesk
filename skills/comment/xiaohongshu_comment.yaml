@@ -1,0 +1,63 @@
+id: xiaohongshu_comment
+name: 小红书评论
+type: domain
+description: 先进入小红书登录页确认是否登录；未登录时等待用户完成登录，再打开用户给定的小红书笔记链接，在底部评论框填写评论内容并点击发送按钮。
+version: "1.0.0"
+
+triggers:
+  - 小红书
+  - xiaohongshu
+  - xhs
+  - rednote
+  - 评论
+  - 留言
+  - 回复
+  - 发评论
+  - 发布评论
+  - 小红书评论
+  - 小红书发布评论
+
+url_patterns:
+  - xiaohongshu.com/explore
+  - "*.xiaohongshu.com/explore"
+  - xiaohongshu.com
+
+domain: xiaohongshu
+
+parameters:
+  comment_text:
+    type: string
+    required: true
+    description: 要发布的评论内容。
+  note_url:
+    type: string
+    required: true
+    description: 小红书笔记链接，例如 https://www.xiaohongshu.com/explore/...
+
+steps:
+  - action: goto
+    args:
+      url: "https://www.xiaohongshu.com/login"
+    comment: 打开小红书登录页，检测是否出现“手机号登录”。
+
+  - action: wait_for_login
+    target: phone_login
+    value: 手机号登录
+    comment: 如果识别到“手机号登录”，说明未登录，等待用户手动完成登录。
+    on_error: continue
+
+  - action: goto
+    args:
+      url: "{{note_url}}"
+    comment: 登录确认后打开用户给定的小红书笔记页面。
+
+  - action: smart_fill
+    target: comment_input
+    value: "{{comment_text}}"
+    comment: 找到底部评论框并填写评论内容。
+    on_error: stop
+
+  - action: smart_click
+    target: send_comment_button
+    comment: 点击评论框右侧的“发送”按钮。
+    on_error: stop

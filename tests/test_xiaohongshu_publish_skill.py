@@ -18,14 +18,18 @@ from src.skill_library.send.xiaohongshu_publish import (
     _click_generate_image,
     _click_new_creation,
     _click_next_step,
+    _click_cover_style,
     _click_text_to_image,
     _click_upload_image,
     _click_upload_video,
     _detect_image_edit,
     _detect_preview_image,
+    _enable_scheduled_publish,
+    _fill_schedule_time,
     _fill_article_content,
     _fill_publish_content,
     _fill_title,
+    _normalize_cover_style,
     _normalize_publish_mode,
     _publish_url_for_mode,
     _upload_local_file,
@@ -172,6 +176,13 @@ class TestPublishUrlForMode:
         assert url == custom_url
 
 
+class TestCoverStyle:
+    def test_normalize_cover_style_defaults_to_basic(self):
+        assert _normalize_cover_style(None) == "基础"
+        assert _normalize_cover_style("不存在") == "基础"
+        assert _normalize_cover_style("我想要弥散样式") == "弥散"
+
+
 def test_xiaohongshu_publish_runs_when_already_logged_in():
     urls = []
     logs = []
@@ -226,12 +237,14 @@ def test_xiaohongshu_publish_requests_code_and_waits_for_about_us():
     assert "wait_after_fill_publish_content" in steps
     assert "click_generate_image" in steps
     assert "detect_preview_image" in steps
+    assert "select_cover_style" in steps
     assert "click_next_step" in steps
     assert "detect_image_edit" in steps
     assert "click_final_publish" in steps
     assert steps.index("wait_after_fill_publish_content") > steps.index("fill_publish_content")
     assert steps.index("click_generate_image") > steps.index("wait_after_fill_publish_content")
     assert steps.index("detect_preview_image") > steps.index("click_generate_image")
+    assert steps.index("select_cover_style") > steps.index("detect_preview_image")
     assert steps.index("click_next_step") > steps.index("detect_preview_image")
     assert steps.index("detect_image_edit") > steps.index("click_next_step")
     assert steps.index("click_final_publish") > steps.index("detect_image_edit")
@@ -558,6 +571,134 @@ def test_xiaohongshu_publish_clicks_text_to_image_generates_and_publishes():
         assert "第一行图文内容" in page.locator("#published").text_content()
 
     _with_page(html, assert_page)
+
+
+def test_xiaohongshu_publish_selects_cover_style():
+    html = """
+    <body>
+      <div class="right-container">
+        <div class="cover-list-header">选择一个喜欢的卡片</div>
+        <div class="cover-item-container">
+          <div class="cover-item active" id="basic"></div>
+          <div class="cover-name">基础</div>
+        </div>
+        <div class="cover-item-container">
+          <div class="cover-item" id="diffuse"></div>
+          <div class="cover-name">弥散</div>
+        </div>
+      </div>
+      <script>
+        document.querySelectorAll('.cover-item').forEach((el) => {
+          el.addEventListener('click', () => {
+            document.querySelectorAll('.cover-item').forEach((item) => item.classList.remove('active'));
+            el.classList.add('active');
+          });
+        });
+      </script>
+    </body>
+    """
+
+    def assert_page(page):
+        result = _click_cover_style(lambda code: page.evaluate(code), "弥散")
+
+        assert result["success"] is True
+        assert result["selected_style"] == "弥散"
+        assert "active" in page.locator("#diffuse").get_attribute("class")
+
+    _with_page(html, assert_page)
+
+
+def test_xiaohongshu_publish_defaults_unknown_cover_style_to_basic():
+    html = """
+    <body>
+      <div class="cover-item-container">
+        <div class="cover-item" id="basic"></div>
+        <div class="cover-name">基础</div>
+      </div>
+      <div class="cover-item-container">
+        <div class="cover-item" id="handwrite"></div>
+        <div class="cover-name">手写</div>
+      </div>
+      <script>
+        document.querySelectorAll('.cover-item').forEach((el) => {
+          el.addEventListener('click', () => {
+            document.querySelectorAll('.cover-item').forEach((item) => item.classList.remove('active'));
+            el.classList.add('active');
+          });
+        });
+      </script>
+    </body>
+    """
+
+    def assert_page(page):
+        result = _click_cover_style(lambda code: page.evaluate(code), "未知样式")
+
+        assert result["success"] is True
+        assert result["selected_style"] == "基础"
+        assert "active" in page.locator("#basic").get_attribute("class")
+
+    _with_page(html, assert_page)
+
+
+def test_xiaohongshu_publish_enables_schedule_and_fills_time():
+    html = """
+    <body>
+      <div class="post-time-switch-container">
+        <div class="custom-switch-card">
+          <span>定时发布</span>
+          <div class="d-switch">
+            <span class="d-switch-simulator unchecked">
+              <input type="checkbox" value="true" />
+            </span>
+          </div>
+        </div>
+        <div class="d-datepicker">
+          <input class="d-text" value="" />
+        </div>
+      </div>
+    </body>
+    """
+
+    def assert_page(page):
+        switch_result = _enable_scheduled_publish(lambda code: page.evaluate(code))
+        time_result = _fill_schedule_time(
+            lambda code: page.evaluate(code),
+            "2026-07-01 11:17",
+        )
+
+        assert switch_result["success"] is True
+        assert page.locator('input[type="checkbox"]').is_checked()
+        assert time_result["success"] is True
+        assert page.locator("input.d-text").input_value() == "2026-07-01 11:17"
+
+    _with_page(html, assert_page)
+
+
+def test_xiaohongshu_publish_text_to_image_style_and_schedule_flow():
+    waits = []
+
+    result = run(
+        keyword="测试图文内容",
+        cover_style="弥散",
+        enable_schedule=True,
+        schedule_time="2026-07-01 11:17",
+        max_wait_seconds=0,
+        goto_fn=_noop,
+        run_js_fn=_mock_publish_run_js(logged_in=True),
+        wait_fn=lambda seconds: waits.append(seconds) or "ok",
+        get_url_fn=lambda: "https://creator.xiaohongshu.com/publish/publish",
+        get_text_fn=lambda: "",
+        log_fn=lambda message: None,
+    )
+
+    assert result["success"] is True
+    assert result["cover_style"] == "弥散"
+    assert result["scheduled"] is True
+    assert result["schedule_time"] == "2026-07-01 11:17"
+    steps = [step["step"] for step in result["steps"]]
+    assert steps.index("select_cover_style") < steps.index("click_next_step")
+    assert steps.index("enable_scheduled_publish") < steps.index("fill_schedule_time")
+    assert steps.index("fill_schedule_time") < steps.index("click_final_publish")
 
 
 def test_xiaohongshu_publish_source_runs_inside_script_engine():

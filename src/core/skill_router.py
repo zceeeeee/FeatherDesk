@@ -418,7 +418,7 @@ class SkillRouter:
 
         source_code = source_path.read_text(encoding="utf-8")
 
-        if skill.id == "domain/xiaohongshu_publish":
+        if skill.id in {"domain/xiaohongshu_publish", "domain/xiaohongshu_comment"}:
             return ""
 
         # 检查源码是否已经自带 run() 调用
