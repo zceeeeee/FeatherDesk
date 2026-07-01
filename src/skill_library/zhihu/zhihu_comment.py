@@ -1,7 +1,4 @@
-"""Zhihu article publishing adapter."""
-
-
-WRITE_URL = "https://zhuanlan.zhihu.com/write"
+REVIEW_URL = "https://zhuanlan.zhihu.com/p/2055675816818774461"
 
 
 def _js_string(value: str) -> str:
@@ -14,35 +11,28 @@ def _js_string(value: str) -> str:
 
 
 def run(keyword: str):
-    """Open Zhihu writer, fill title/body with keyword, and click publish."""
-    goto(WRITE_URL)
-    wait_for_element("div.WriteIndex-pageTitle", timeout=20)
+    """Open Zhihu article page and fill the comment editor with keyword."""
+    goto(REVIEW_URL)
 
-    fill(
-        "textarea.Input.i7cW1UcwT6ThdhTakqFm",
-        keyword,
-        "textarea[placeholder*='100']",
-    )
+    editor_selector = ".Comments-container .public-DraftEditor-content[contenteditable='true']"
+    wait_for_element(editor_selector, timeout=20)
 
-    wait_for_element(".DraftEditor-root", timeout=15)
-    body_text = _js_string(keyword)
+    review_text = _js_string(keyword)
     run_js(
         f"""(() => {{
-            const text = {body_text};
-            const root = document.querySelector(".DraftEditor-root");
-            if (!root) return "DraftEditor root not found";
-
+            const text = {review_text};
             const editor =
-                root.querySelector("[contenteditable='true']") ||
-                root.querySelector(".public-DraftEditor-content");
-            if (!editor) return "DraftEditor content not found";
+                document.querySelector("{editor_selector}") ||
+                document.querySelector(".Comments-container [role='textbox'][contenteditable='true']");
+            if (!editor) return "Zhihu review editor not found";
 
             editor.focus();
+
             const offsetSpan = editor.querySelector(
                 "div[data-contents='true'] .Editable-unstyled " +
                 "div[data-offset-key] > span[data-offset-key]"
             );
-            if (!offsetSpan) return "DraftEditor offset span not found";
+            if (!offsetSpan) return "Zhihu review offset span not found";
 
             const offsetKey = offsetSpan.getAttribute("data-offset-key") || "";
             offsetSpan.innerHTML = "";
@@ -65,9 +55,13 @@ def run(keyword: str):
             return textSpan.outerHTML;
         }})()"""
     )
-
-    wait_for_element("button.Button--primary", timeout=15)
-    click("button.Button--primary")
+    click(editor_selector)
     wait(2)
 
-    log(f"Zhihu article publish clicked: {keyword}")
+    publish_selector = "button.Button.Button--primary.Button--blue.css-pbx6oc"
+    wait_for_element(publish_selector, timeout=15)
+    click(publish_selector)
+    wait(2)
+
+    log(f"Zhihu review published: {keyword}")
+    close_browser()

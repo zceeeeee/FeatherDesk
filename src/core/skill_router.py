@@ -440,34 +440,118 @@ class SkillRouter:
         task: str,
     ) -> str:
         """根据 params 声明从任务中提取参数，生成 run() 调用。"""
-        extracted: Dict[str, str] = {}
-        missing: List[str] = []
+        extracted: Dict[str, str] = {param_name: "-1" for param_name in skill.params}
 
         for param_name, param_def in skill.params.items():
             value = self._extract_param(task, param_name, param_def)
             if value:
                 extracted[param_name] = value
-            elif param_def.get("required", False):
-                missing.append(param_name)
-
-        if missing:
-            # 缺少必填参数 → 生成报错脚本，让 agent loop 知道需要追问
-            missing_str = ", ".join(missing)
-            return (
-                f"{source_code}\n\n"
-                f"raise ValueError('{skill.id} 缺少必填参数: {missing_str}')"
-            )
 
         # 构造 run() 调用
+        llm_values = self._extract_params_with_llm(skill, task, extracted)
+        for param_name, value in llm_values.items():
+            if value and value != "-1":
+                extracted[param_name] = value
+
         args_parts = []
         for param_name in skill.params:
-            if param_name in extracted:
-                args_parts.append(
-                    f"{param_name}={json.dumps(extracted[param_name], ensure_ascii=False)}"
-                )
+            args_parts.append(
+                f"{param_name}={json.dumps(extracted.get(param_name, '-1'), ensure_ascii=False)}"
+            )
 
         args_str = ", ".join(args_parts)
         return f"{source_code}\n\n# 自动调用\nrun({args_str})"
+
+    def _extract_params_with_llm(
+        self,
+        skill: SkillRouterInfo,
+        task: str,
+        rule_values: Dict[str, str],
+    ) -> Dict[str, str]:
+        """Extract declared skill params with LLM. Missing values are "-1"."""
+        if not self._llm_caller:
+            return {}
+
+        params_meta: Dict[str, Dict[str, Any]] = {}
+        for name, meta in skill.params.items():
+            params_meta[name] = {
+                "type": meta.get("type", "string"),
+                "required": bool(meta.get("required", False)),
+                "description": meta.get("description", ""),
+            }
+
+        skill_meta = {
+            "id": skill.id,
+            "name": skill.name,
+            "description": skill.description,
+            "examples": skill.examples[:5],
+        }
+
+        prompt = (
+            "You are a strict parameter extractor for browser automation.\n"
+            "The skill has already been selected. Extract values from the user task "
+            "for every declared parameter.\n\n"
+            f"User task:\n{task}\n\n"
+            f"Selected skill:\n{json.dumps(skill_meta, ensure_ascii=False, indent=2)}\n\n"
+            f"Declared parameters:\n{json.dumps(params_meta, ensure_ascii=False, indent=2)}\n\n"
+            f"Values already found by rules:\n{json.dumps(rule_values, ensure_ascii=False, indent=2)}\n\n"
+            "Return one JSON object whose keys are exactly the declared parameter names.\n"
+            "Rules:\n"
+            "- If a value is clearly present in the user task, return that value as a string.\n"
+            "- If a value cannot be found, return \"-1\" for that key.\n"
+            "- Do not invent titles, comments, article bodies, phone numbers, or URLs.\n"
+            "- Do not return markdown or any text outside JSON.\n"
+        )
+
+        try:
+            raw = self._llm_caller.call(prompt)
+            data = self._parse_json_object(raw)
+        except Exception as exc:
+            logger.warning("LLM param extraction failed: %s", exc)
+            return {}
+
+        if not data:
+            logger.warning("LLM param extraction returned non-JSON")
+            return {}
+
+        extracted: Dict[str, str] = {}
+        for param_name in skill.params:
+            value = data.get(param_name, "-1")
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            if value is None:
+                value = "-1"
+            value = str(value).strip()
+            if not value or value.lower() in {"none", "null", "unknown", "n/a"}:
+                value = "-1"
+            extracted[param_name] = value
+        return extracted
+
+    @staticmethod
+    def _parse_json_object(raw: str) -> Optional[Dict[str, Any]]:
+        """Parse a JSON object from raw LLM text, including fenced output."""
+        text = raw.strip()
+        if "```" in text:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start != -1 and end > start:
+                text = text[start:end]
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start == -1 or end <= start:
+                return None
+            try:
+                parsed = json.loads(text[start:end])
+            except json.JSONDecodeError:
+                return None
+
+        if not isinstance(parsed, dict):
+            return None
+        return parsed
 
     @staticmethod
     def _extract_param(

@@ -469,22 +469,6 @@ skills:
         required: true
         description: "搜索关键词"
 
-  - id: "domain/zhihu_search"
-    name: "知乎搜索"
-    type: "domain"
-    triggers: ["知乎", "zhihu", "搜索", "问答"]
-    url_patterns: ["zhihu.com"]
-    description: "在知乎搜索"
-    version: "1.0.0"
-    examples:
-      - "在知乎搜索 Python 入门"
-      - "知乎上搜一下如何学编程"
-    params:
-      keyword:
-        type: keyword
-        required: true
-        description: "搜索关键词"
-
   - id: "domain/taobao_search"
     name: "淘宝搜索"
     type: "domain"
@@ -549,6 +533,9 @@ skills:
         required: true
         description: "搜索关键词"
 
+
+# 知乎模块
+
   - id: "domain/zhihu_send"
     name: "知乎发布"
     type: "domain"
@@ -568,6 +555,73 @@ skills:
           - "(?:在|到)?知乎(?:上)?(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
           - "(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
     confirm_before_run: true
+
+  - id: "domain/zhihu_approve"
+    name: "知乎点赞"
+    type: "domain"
+    triggers: ["知乎点赞"]
+    url_patterns: ["zhihu.com", "zhuanlan.zhihu.com"]
+    description: "在知乎点赞文章"
+    version: "1.0.0"
+    examples:
+      - "在知乎给一篇文章点赞"
+    params:
+      keyword:
+        type: quoted
+        required: true
+        description: "文章内容"
+        extract_patterns:
+          - "(?:在|到)?知乎(?:上)?(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
+          - "(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
+    confirm_before_run: true
+
+  - id: "domain/zhihu_search"
+    name: "知乎搜索"
+    type: "domain"
+    triggers: ["知乎 搜索"]
+    url_patterns: ["zhihu.com"]
+    description: "在知乎搜索"
+    version: "1.0.0"
+    examples:
+      - "在知乎搜索 Python 入门"
+      - "知乎上搜一下如何学编程"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索关键词"
+
+  - id: "domain/zhihu_comment"
+    name: "知乎评论"
+    type: "domain"
+    triggers: ["知乎评论", "知乎 评论", "知乎回复", "知乎 回复", "评论知乎", "回复知乎"]
+    url_patterns: ["zhihu.com", "zhuanlan.zhihu.com"]
+    description: "在知乎评论"
+    version: "1.0.0"
+    examples:
+      - "在知乎评论 你好"
+      - "知乎回复 内容是 写得很好"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "评论内容"
+
+  - id: "domain/zhihu_answer"
+    name: "知乎回答"
+    type: "domain"
+    triggers: ["知乎 回答","知乎回答"]
+    url_patterns: ["zhihu.com", "zhuanlan.zhihu.com"]
+    description: "在知乎回答"
+    version: "1.0.0"
+    examples:
+      - "在知乎评论 你好"
+      - "知乎回复 内容是 写得很好"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "评论内容"
 
   # ──────────────────────────────────────────────
   # 通用交互模板
@@ -622,11 +676,32 @@ skills:
       - "翻到下一页"
       - "继续浏览下一页"
 
+
 # ──────────────────────────────────────────────
 # sources 段 -- 文件映射
 # ──────────────────────────────────────────────
 
 sources:
+  - id: "domain/zhihu_search"
+    file: "zhihu/zhihu_search.py"
+    entry: "run"
+
+  - id: "domain/zhihu_send"
+    file: "zhihu/zhihu_send_article.py"
+    entry: "run"
+
+  - id: "domain/zhihu_approve"
+    file: "zhihu/zhihu_approve.py"
+    entry: "run"
+
+  - id: "domain/zhihu_comment"
+    file: "zhihu/zhihu_comment.py"
+    entry: "run"
+
+  - id: "domain/zhihu_answer"
+    file: "zhihu/zhihu_answer.py"
+    entry: "run"
+
   - id: "domain/baidu_search"
     file: "search/baidu_search.py"
     entry: "run"
@@ -707,10 +782,6 @@ sources:
     file: "search/weibo_search.py"
     entry: "run"
 
-  - id: "domain/zhihu_search"
-    file: "search/zhihu_search.py"
-    entry: "run"
-
   - id: "domain/xiaohongshu_search"
     file: "search/xiaohongshu_search.py"
     entry: "run"
@@ -727,10 +798,7 @@ sources:
     file: "search/csnd_search.py"
     entry: "run"
 
-  - id: "domain/zhihu_send"
-    file: "send/zhihu_send.py"
-    entry: "run"
-
+ 
   - id: "interaction/login_flow"
     file: "others/login_flow.py"
     entry: "run"

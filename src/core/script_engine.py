@@ -226,6 +226,10 @@ class ScriptEngine:
             selector_list = [selector] + list(fallbacks)
             return do_fill(page, selector_list, value)
 
+        # 安全的 close browser
+        def safe_close_browser() -> None:
+            self._get_browser_manager().close()
+
 
         # 构建命名空间
         ns: dict[str, Any] = {"__builtins__": _SAFE_BUILTINS}
@@ -235,6 +239,7 @@ class ScriptEngine:
         ns["click"] = safe_click
         ns["fill"] = safe_fill
         ns["screenshot"] = safe_screenshot
+        ns["close_browser"] = safe_close_browser
 
         # 注入工具函数
         ns["print"] = safe_print
