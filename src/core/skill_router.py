@@ -170,6 +170,21 @@ class SkillRouter:
         if not candidates:
             return SkillDecision(source="none", reason="关键词无匹配")
 
+        if self._is_gmail_send_intent(task.lower()):
+            gmail_send = next(
+                (skill for skill, _ in candidates if skill.id == "domain/gmail_send"),
+                None,
+            )
+            if gmail_send:
+                script = self.build_script(gmail_send, task)
+                return SkillDecision(
+                    skill=gmail_send,
+                    confidence=0.95,
+                    reason=f"明确 Gmail 发送邮件意图: {gmail_send.name}",
+                    source="keyword",
+                    script=script,
+                )
+
         top_skill, top_score = candidates[0]
 
         # 单候选且高分 → 直接命中
@@ -224,6 +239,23 @@ class SkillRouter:
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:limit]
+
+    @staticmethod
+    def _is_gmail_send_intent(query_lower: str) -> bool:
+        if "gmail" not in query_lower:
+            return False
+        send_markers = (
+            "gmail发送邮件",
+            "gmail发邮件",
+            "gmail寄邮件",
+            "发送邮件",
+            "发邮件",
+            "寄邮件",
+            "邮件发送",
+            "send email",
+            "compose email",
+        )
+        return any(marker in query_lower for marker in send_markers)
 
     def _match_score(self, skill: SkillRouterInfo, query_lower: str) -> float:
         """计算技能与查询的匹配分数 (0.0 ~ 1.0)。"""
@@ -418,7 +450,11 @@ class SkillRouter:
 
         source_code = source_path.read_text(encoding="utf-8")
 
-        if skill.id in {"domain/xiaohongshu_publish", "domain/xiaohongshu_comment"}:
+        if skill.id in {
+            "domain/gmail_send",
+            "domain/xiaohongshu_publish",
+            "domain/xiaohongshu_comment",
+        }:
             return ""
 
         # 检查源码是否已经自带 run() 调用

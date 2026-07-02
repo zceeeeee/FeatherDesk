@@ -24,3 +24,8 @@ bilibili账号，电话号码是13574133406，在视频https://www.bilibili.com/
 小红书发布内容，标题是“测试发布功能”，内容“测试发布功能”，样式是涂鸦。
 小红书发布内容“测试发布功能”,图片地址是"D:\Users\qq275\Pictures\picture\1_1df056917d2ce8cbca9571112e5f3f9b.jpg"
 小红书上传视频，地址是"D:\Users\qq275\xwechat_files\wxid_am0to805t4fn22_4242\msg\video\2026-06\c38426b78e62460e709392b4c04974d7.mp4"
+用gmail邮箱给12412639@mail.sustech.edu.cn发送邮件，标题是“测试邮件”，内容是“测试邮件内容”，附件是"D:\Users\qq275\Pictures\picture\1_1df056917d2ce8cbca9571112e5f3f9b.jpg"。
+gmail发送邮件，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”
+gmail发送邮件，发件邮箱是che53438@gmail.com，密码是8105432a，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”
+gmail登录12412639@mail.sustech.edu.cn，密码是8105432a
+

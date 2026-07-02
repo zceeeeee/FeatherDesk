@@ -572,6 +572,27 @@ def mouse_click(x: float, y: float) -> dict:
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def type_text(text: str) -> dict:
+    """Type text into the currently focused element using browser keyboard events."""
+    page = get_browser_manager().get_page()
+    try:
+        value = str(text)
+        page.keyboard.type(value)
+        return {"success": True, "text_length": len(value)}
+    except Exception as exc:
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def press_key(key: str) -> dict:
+    """Press a keyboard key in the current page."""
+    page = get_browser_manager().get_page()
+    try:
+        page.keyboard.press(str(key))
+        return {"success": True, "key": str(key)}
+    except Exception as exc:
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def upload_file(selector: str, file_path: str) -> dict:
     """Set a local file path on a file input in the current page."""
     page = get_browser_manager().get_page()
@@ -719,6 +740,8 @@ def get_controls_exports() -> Dict[str, Any]:
         # JavaScript
         "run_js": run_js,
         "mouse_click": mouse_click,
+        "type_text": type_text,
+        "press_key": press_key,
         "upload_file": upload_file,
         # Cookie 持久化
         "save_cookies": save_cookies,

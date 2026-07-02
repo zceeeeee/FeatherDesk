@@ -346,5 +346,7 @@ class TestExports:
         assert "get_text" in exports
         assert "screenshot" in exports
         assert "mouse_click" in exports
+        assert "type_text" in exports
+        assert "press_key" in exports
         assert "upload_file" in exports
         assert len(exports) >= 15
