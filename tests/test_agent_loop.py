@@ -13,6 +13,7 @@ from src.core.agent_loop import (
     AgentTaskResult,
     run_task,
 )
+from src.core.dom_explorer import DomPageSummary, InteractiveElement
 from src.core.skill_router import SkillRouter
 from src.skill_library.registry import SkillRegistry
 
@@ -400,6 +401,25 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_search"
+
+    def test_router_routes_zhihu_search_without_space_to_zhihu_script(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("知乎搜索人工智能")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/zhihu_search"
+        assert 'run(keyword="人工智能")' in decision.script
+        assert "baidu_search" not in decision.script
+
+    def test_router_routes_zhihu_search_with_prefix_to_zhihu_script(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("在知乎搜索 Python 入门")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/zhihu_search"
+        assert 'run(keyword="Python 入门")' in decision.script
 
     def test_router_defaults_generic_publish_content_to_xiaohongshu_publish_script(self):
         router = SkillRouter(library_dir="src/skill_library")
@@ -955,6 +975,26 @@ class TestAgentLoop:
         result = agent.run("截图")
 
         assert result.success is True
+
+    def test_observe_uses_dom_explorer(self, mock_browser):
+        """Should observe with a DOM summary before any vision fallback."""
+        summary = DomPageSummary(
+            url="https://example.com",
+            title="Example",
+            elements=[InteractiveElement(tag="button", text="登录", selector="#login")],
+            counts={"button": 1},
+            has_modal=True,
+        )
+
+        with patch("src.core.agent_loop.summarize_page", return_value=summary):
+            agent = AgentLoop(max_steps=3)
+            step = AgentStep(step_number=1, state=AgentState.OBSERVE)
+            state = agent._do_observe(step)
+
+        assert state == AgentState.PLAN
+        assert "可交互元素: 1" in step.page_summary
+        assert "Modal" in step.page_summary
+        assert "可交互元素 1 个" in step.result
 
 
 # ---------------------------------------------------------------------------

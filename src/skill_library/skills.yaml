@@ -665,7 +665,7 @@ skills:
   - id: "domain/zhihu_search"
     name: "知乎搜索"
     type: "domain"
-    triggers: ["知乎 搜索"]
+    triggers: ["知乎搜索", "知乎 搜索", "在知乎搜索", "知乎上搜", "知乎搜", "搜索知乎", "zhihu", "zhihu search"]
     url_patterns: ["zhihu.com"]
     description: "在知乎搜索"
     version: "1.0.0"
