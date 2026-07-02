@@ -728,7 +728,7 @@ skills:
     type: "domain"
     platform: "zhihu"
     action: "search"
-    triggers: ["知乎 搜索"]
+    triggers: ["知乎搜索", "知乎 搜索", "在知乎搜索", "知乎上搜", "知乎搜", "搜索知乎", "zhihu", "zhihu search"]
     trigger_patterns:
       - "(?:在|用|打开)?\\s*(?:知乎|zhihu)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
       - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:知乎|zhihu)(?:上)?$"

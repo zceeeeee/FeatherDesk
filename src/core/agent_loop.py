@@ -5,14 +5,14 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 直到任务完成或达到最大步数。
 
 每一步：
-1. OBSERVE: 截图 + 分析当前页面状态
+1. OBSERVE: DOM Explorer 摘要当前页面状态
 2. PLAN:   决定下一步行动（查技能库 or 生成脚本）
 3. ACT:    执行脚本，观察结果
 
 失败恢复：
 - 脚本执行失败 → 自愈机制（选择器降级）
-- 选择器全部失败 → 视觉 fallback（用坐标点击）
-- 视觉 fallback 失败 → 记录经验，尝试其他方案
+- 选择器全部失败 → 保留视觉 fallback 扩展点，但默认不截图、不调用 VLM
+- 视觉 fallback 不可用 → 记录经验，尝试其他方案
 
 集成:
 - 结构化日志: 通过 src.logging 的 get_logger / bind_context / log_timing
@@ -28,6 +28,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from src.core.browser_manager import get_browser_manager
+from src.core.dom_explorer import summarize_page
 from src.core.event_bus import (
     EVENT_AGENT_ACT,
     EVENT_AGENT_HEAL,
@@ -91,7 +92,7 @@ class _LLMCallerAdapter:
 class AgentState(str, Enum):
     """Agent 循环状态。"""
 
-    OBSERVE = "observe"  # 截图 + 分析页面
+    OBSERVE = "observe"  # DOM 摘要 + 分析页面
     PLAN = "plan"  # 决定下一步
     ACT = "act"  # 执行脚本
     DONE = "done"  # 任务完成
@@ -363,7 +364,7 @@ class AgentLoop:
         )
 
     # -------------------------------------------------------------------
-    # OBSERVE: 截图 + 分析页面
+    # OBSERVE: DOM Explorer + 基础页面信息
     # -------------------------------------------------------------------
 
     def _do_observe(self, step: AgentStep) -> AgentState:
@@ -384,36 +385,45 @@ class AgentLoop:
 
         page = get_browser_manager().get_page()
 
-        # 尝试视觉分析（暂时禁用 VisionModule）
-        # if self._vision:
-        #     try:
-        #         with log_timing("agent_observe_vision") as meta:
-        #             analysis = self._vision.analyze_page(
-        #                 question="当前页面是什么？有哪些可操作的元素？"
-        #             )
-        #             meta["summary_length"] = len(analysis.summary)
-        #         step.page_summary = analysis.summary
-        #         step.result = f"页面: {analysis.summary[:100]}"
-        #         logger.info(
-        #             "OBSERVE: vision analysis succeeded (%d chars)",
-        #             len(analysis.summary),
-        #         )
-        #         self._bus.emit(
-        #             Event(
-        #                 name=EVENT_AGENT_OBSERVE,
-        #                 phase=Phase.AFTER,
-        #                 data={"step_number": step.step_number, "method": "vision"},
-        #                 result=analysis.summary,
-        #             )
-        #         )
-        #         return AgentState.PLAN
-        #     except Exception as exc:
-        #         logger.debug(
-        #             "OBSERVE: vision analysis failed (%s), falling back",
-        #             exc,
-        #         )
+        try:
+            with log_timing("agent_observe_dom") as meta:
+                dom_summary = summarize_page(page)
+                meta["interactive_count"] = dom_summary.interactive_count
+                meta["has_modal"] = dom_summary.has_modal
+                meta["has_canvas"] = dom_summary.canvas_count > 0
 
-        # 降级：用基础信息
+            step.page_summary = dom_summary.to_text()
+            step.result = (
+                f"页面: {dom_summary.title or dom_summary.url} "
+                f"(可交互元素 {dom_summary.interactive_count} 个)"
+            )
+            logger.info(
+                "OBSERVE: DOM summary collected (%d interactive elements)",
+                dom_summary.interactive_count,
+            )
+            self._bus.emit(
+                Event(
+                    name=EVENT_AGENT_OBSERVE,
+                    phase=Phase.AFTER,
+                    data={
+                        "step_number": step.step_number,
+                        "method": "dom_explorer",
+                        "url": dom_summary.url,
+                        "title": dom_summary.title,
+                        "interactive_count": dom_summary.interactive_count,
+                        "has_modal": dom_summary.has_modal,
+                        "has_drawer": dom_summary.has_drawer,
+                        "has_dropdown": dom_summary.has_dropdown,
+                        "canvas_count": dom_summary.canvas_count,
+                        "svg_count": dom_summary.svg_count,
+                    },
+                    result=step.page_summary,
+                )
+            )
+            return AgentState.PLAN
+        except Exception as exc:
+            logger.debug("OBSERVE: DOM explorer failed (%s), falling back", exc)
+
         url = page.url
         title = page.title()
         step.page_summary = f"{title} ({url})"
