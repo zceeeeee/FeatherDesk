@@ -623,6 +623,35 @@ class AgentLoop:
                 f"{json.dumps(password, ensure_ascii=False)})"
             )
 
+        if skill_id == "domain/gmail_send":
+            recipient, subject, body = self._extract_gmail_send_fields(task)
+            sender_email, password = self._extract_gmail_send_account(task)
+            missing = []
+            if not recipient:
+                missing.append("recipient")
+            if not subject:
+                missing.append("subject")
+            if not body:
+                missing.append("body")
+            if missing:
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('Gmail send requires {', '.join(missing)}')"
+                )
+            kwargs = []
+            if sender_email and password:
+                kwargs.append(f"sender_email={json.dumps(sender_email, ensure_ascii=False)}")
+                kwargs.append(f"password={json.dumps(password, ensure_ascii=False)}")
+            kwargs_text = ", " + ", ".join(kwargs) if kwargs else ""
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"_result = run({json.dumps(recipient, ensure_ascii=False)}, "
+                f"{json.dumps(subject, ensure_ascii=False)}, "
+                f"{json.dumps(body, ensure_ascii=False)}{kwargs_text})\n"
+                "if isinstance(_result, dict) and not _result.get('success', True):\n"
+                "    raise RuntimeError(_result.get('error') or str(_result))"
+            )
+
         if skill_id == "domain/github_login":
             credentials = self._extract_login_credentials(task)
             if not credentials:
@@ -861,6 +890,88 @@ class AgentLoop:
             password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
             return email_match.group(1), password
         return AgentLoop._extract_login_credentials(task)
+
+    @staticmethod
+    def _extract_gmail_send_fields(task: str) -> tuple[str | None, str | None, str | None]:
+        import re
+
+        quote_chars = "'\"`“”‘’"
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip().strip(quote_chars)
+            text = text.rstrip("，,。.;；!！?？)）\n\r\t ").strip()
+            text = text.strip(quote_chars)
+            return text or None
+
+        def find_labeled(label_pattern: str, stop_pattern: str | None = None) -> str | None:
+            quoted = re.search(
+                rf"(?:{label_pattern})\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if quoted:
+                return clean(quoted.group(1))
+
+            if stop_pattern:
+                pattern = (
+                    rf"(?:{label_pattern})\s*(?:是|为|:|：|=)?\s*(.+?)"
+                    rf"(?=\s*(?:{stop_pattern})\s*(?:是|为|:|：|=)?|$)"
+                )
+            else:
+                pattern = rf"(?:{label_pattern})\s*(?:是|为|:|：|=)?\s*(.+)$"
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                return clean(match.group(1))
+            return None
+
+        recipient = None
+        recipient_match = re.search(
+            r"(?:收件人|收件邮箱|收信人|发送给|发给|寄给|to|recipient)[^A-Z0-9@]{0,16}"
+            r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+            task,
+            re.IGNORECASE,
+        )
+        if recipient_match:
+            recipient = recipient_match.group(1).strip()
+        else:
+            any_email = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", task, re.IGNORECASE)
+            if any_email:
+                recipient = any_email.group(0).strip()
+
+        subject = find_labeled(
+            r"邮件标题|信件标题|标题|主题|subject|title",
+            r"邮件正文|正文内容|正文|邮件内容|内容|body|content",
+        )
+        body = find_labeled(r"邮件正文|正文内容|正文|邮件内容|内容|body|content")
+
+        return recipient, subject, body
+
+    @staticmethod
+    def _extract_gmail_send_account(task: str) -> tuple[str | None, str | None]:
+        import re
+
+        sender = None
+        sender_match = re.search(
+            r"(?:发件邮箱|发件人|发信邮箱|发送邮箱|账号邮箱|邮箱账号|sender|from)[^A-Z0-9@]{0,16}"
+            r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+            task,
+            re.IGNORECASE,
+        )
+        if sender_match:
+            sender = sender_match.group(1).strip()
+
+        password = None
+        password_match = re.search(
+            r"(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\s,，;；。)）]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if password_match:
+            password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
+
+        return sender, password
 
     @staticmethod
     def _extract_phone_number(task: str) -> str | None:
@@ -1184,6 +1295,21 @@ class AgentLoop:
         这类宽泛触发词抢走“知乎搜索”“GitHub 搜索”等站点技能。
         """
         task_lower = task.lower()
+        gmail_send_markers = (
+            "gmail发送邮件",
+            "gmail发邮件",
+            "gmail寄邮件",
+            "发送邮件",
+            "发邮件",
+            "寄邮件",
+            "邮件发送",
+            "send email",
+            "compose email",
+        )
+        if any(marker in task_lower for marker in gmail_send_markers):
+            for skill in skills:
+                if getattr(skill, "id", "") == "domain/gmail_send":
+                    return skill
         broad_triggers = {"搜索", "search", "查找", "find", "找"}
 
         def score(skill: Any) -> tuple[int, int, int]:

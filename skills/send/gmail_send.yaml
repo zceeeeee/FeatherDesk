@@ -1,0 +1,102 @@
+id: gmail_send
+name: Gmail 发送邮件
+type: domain
+description: 检查 Gmail 是否已登录，必要时等待用户手动登录，然后点击 Compose，填写收件人、标题和正文并发送。
+version: "1.0.0"
+
+triggers:
+  - gmail
+  - Gmail
+  - gmail发送邮件
+  - Gmail发送邮件
+  - gmail 发邮件
+  - Gmail 发邮件
+  - gmail寄邮件
+  - 发送邮件
+  - 发邮件
+  - 寄邮件
+  - 邮件发送
+  - 收件人
+  - 收件邮箱
+  - 发件邮箱
+  - 发件人
+  - 密码
+  - 标题
+  - 主题
+  - 内容
+  - 正文
+  - 邮件标题
+  - 邮件正文
+  - send email
+  - compose email
+  - Compose
+
+url_patterns:
+  - mail.google.com
+
+domain: gmail
+
+parameters:
+  recipient:
+    type: string
+    required: true
+    description: 收件人邮箱。
+  subject:
+    type: string
+    required: true
+    description: 邮件标题或主题。
+  body:
+    type: string
+    required: true
+    description: 邮件正文。
+  sender_email:
+    type: string
+    required: false
+    description: 发件 Gmail 邮箱；如果未登录，将使用它自动执行登录步骤。
+  password:
+    type: string
+    required: false
+    description: 发件 Gmail 密码；如果未登录，将使用它自动执行登录步骤。
+  inbox_url:
+    type: string
+    required: false
+    default: "https://mail.google.com/mail/u/0/#inbox"
+    description: Gmail 收件箱入口。
+
+steps:
+  - action: goto
+    args:
+      url: "{{inbox_url}}"
+    comment: 打开 Gmail 收件箱，检查顶部是否出现 Search mail。
+
+  - action: wait_login
+    args:
+      max_seconds: 300
+    comment: 如果没有识别到 Search mail，则等待用户手动完成登录，最长 5 分钟。
+
+  - action: smart_click
+    target: compose_button
+    comment: 点击左上 Compose 按钮。
+
+  - action: wait
+    target: compose_popup
+    comment: 识别 Compose / New Message 弹窗。
+
+  - action: smart_fill
+    target: to_recipients
+    value: "{{recipient}}"
+    comment: 填写收件人。
+
+  - action: smart_fill
+    target: subject
+    value: "{{subject}}"
+    comment: 填写邮件标题。
+
+  - action: smart_fill
+    target: message_body
+    value: "{{body}}"
+    comment: 填写邮件正文。
+
+  - action: smart_click
+    target: send_button
+    comment: 点击 Send 发送。

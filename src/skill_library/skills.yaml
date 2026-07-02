@@ -187,6 +187,64 @@ skills:
         extract_patterns:
           - "(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\\s,，;；。)）]+)"
 
+  - id: "domain/gmail_send"
+    name: "Gmail 发送邮件"
+    type: "domain"
+    triggers:
+      - "gmail"
+      - "Gmail"
+      - "gmail发送邮件"
+      - "Gmail发送邮件"
+      - "gmail 发邮件"
+      - "Gmail 发邮件"
+      - "gmail寄邮件"
+      - "发送邮件"
+      - "发邮件"
+      - "寄邮件"
+      - "邮件发送"
+      - "收件人"
+      - "收件邮箱"
+      - "发件邮箱"
+      - "发件人"
+      - "密码"
+      - "标题"
+      - "主题"
+      - "内容"
+      - "正文"
+      - "邮件标题"
+      - "邮件正文"
+      - "send email"
+      - "compose email"
+      - "Compose"
+    url_patterns: ["mail.google.com"]
+    description: "检查 Gmail 是否已登录，必要时等待用户手动登录，然后点击 Compose，填写收件人、标题和正文并发送"
+    version: "1.0.0"
+    examples:
+      - "Gmail发送邮件，收件人是alice@example.com，标题是测试标题，正文是测试正文"
+      - "用 Gmail 发邮件给 bob@example.com，主题是 hello，内容是 hi"
+    params:
+      recipient:
+        type: email
+        required: true
+        description: "收件人邮箱"
+      subject:
+        type: string
+        required: true
+        description: "邮件标题或主题"
+      body:
+        type: string
+        required: true
+        description: "邮件正文"
+      sender_email:
+        type: email
+        required: false
+        description: "发件 Gmail 邮箱，用于未登录时自动登录"
+      password:
+        type: string
+        required: false
+        description: "发件 Gmail 密码，用于未登录时自动登录"
+    confirm_before_run: true
+
   - id: "domain/outlook_inbox"
     name: "Outlook 收件箱"
     type: "domain"
@@ -760,6 +818,10 @@ sources:
 
   - id: "domain/gmail_login"
     file: "others/gmail_login.py"
+    entry: "run"
+
+  - id: "domain/gmail_send"
+    file: "send/gmail_send.py"
     entry: "run"
 
   - id: "domain/outlook_inbox"

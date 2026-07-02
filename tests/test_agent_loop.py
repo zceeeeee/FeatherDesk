@@ -219,6 +219,39 @@ class TestGitHubLoginScript:
 
         assert 'run("che53438@gmail.com", "8105432a")' in script
 
+    def test_extract_gmail_send_fields_from_example_text(self):
+        fields = AgentLoop._extract_gmail_send_fields(
+            "Gmail发送邮件，收件人是alice@example.com，标题是“测试标题”，正文是“测试正文”。"
+        )
+
+        assert fields == ("alice@example.com", "测试标题", "测试正文")
+
+    def test_extract_gmail_send_fields_from_user_text(self):
+        fields = AgentLoop._extract_gmail_send_fields(
+            "gmail发送邮件，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”"
+        )
+
+        assert fields == ("12412639@mail.sustech.edu.cn", "测试邮件", "测试邮件内容")
+
+    def test_extract_gmail_send_account_from_user_text(self):
+        account = AgentLoop._extract_gmail_send_account(
+            "gmail发送邮件，发件邮箱是12412639@mail.sustech.edu.cn，密码是8105432a，收件邮箱是alice@example.com，标题是“测试邮件”，内容是“测试邮件内容”"
+        )
+
+        assert account == ("12412639@mail.sustech.edu.cn", "8105432a")
+
+    def test_build_gmail_send_script_passes_recipient_subject_and_body(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(recipient, subject, body):\n    log(subject)"
+
+        script = agent._build_skill_script(
+            source,
+            "Gmail发送邮件，收件人是alice@example.com，标题是“测试标题”，正文是“测试正文”。",
+            "domain/gmail_send",
+        )
+
+        assert 'run("alice@example.com", "测试标题", "测试正文")' in script
+
     def test_extract_phone_number_chinese(self):
         phone_number = AgentLoop._extract_phone_number(
             "登录小红书，手机号 13800138000"
@@ -409,6 +442,92 @@ class TestGitHubLoginScript:
         assert 'title="视频标题"' in script
         assert 'run("视频正文"' in script
 
+    def test_router_routes_gmail_send_to_send_fallback(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route(
+            "Gmail发送邮件，收件人是alice@example.com，标题是测试标题，正文是测试正文"
+        )
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/gmail_send"
+        assert decision.script == ""
+
+    def test_router_routes_gmail_send_with_sender_login_to_send_fallback(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route(
+            "gmail发送邮件，发件邮箱是12412639@mail.sustech.edu.cn，密码是8105432a，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”"
+        )
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/gmail_send"
+        assert decision.script == ""
+
+    def test_registry_fallback_builds_gmail_send_script(self):
+        task = "Gmail发送邮件，收件人是alice@example.com，标题是测试标题，正文是测试正文"
+        registry = SkillRegistry(library_dir="src/skill_library")
+        registry.load_from_yaml()
+        agent = AgentLoop(max_steps=3)
+
+        skills = registry.search(query=task)
+        selected = agent._select_best_skill(skills, task)
+        detail = registry.get_detail(selected.id)
+        assert detail is not None
+
+        script = agent._build_skill_script(detail.source_code, task, selected.id)
+
+        assert selected.id == "domain/gmail_send"
+        assert 'run("alice@example.com", "测试标题", "测试正文")' in script
+
+    def test_registry_fallback_builds_gmail_send_script_from_user_text(self):
+        task = "gmail发送邮件，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”"
+        registry = SkillRegistry(library_dir="src/skill_library")
+        registry.load_from_yaml()
+        agent = AgentLoop(max_steps=3)
+
+        skills = registry.search(query=task)
+        selected = agent._select_best_skill(skills, task)
+        detail = registry.get_detail(selected.id)
+        assert detail is not None
+
+        script = agent._build_skill_script(detail.source_code, task, selected.id)
+
+        assert selected.id == "domain/gmail_send"
+        assert 'run("12412639@mail.sustech.edu.cn", "测试邮件", "测试邮件内容")' in script
+
+    def test_registry_fallback_builds_gmail_send_script_with_sender_login(self):
+        task = "gmail发送邮件，发件邮箱是12412639@mail.sustech.edu.cn，密码是8105432a，收件邮箱是alice@example.com，标题是“测试邮件”，内容是“测试邮件内容”"
+        registry = SkillRegistry(library_dir="src/skill_library")
+        registry.load_from_yaml()
+        agent = AgentLoop(max_steps=3)
+
+        skills = registry.search(query=task)
+        selected = agent._select_best_skill(skills, task)
+        detail = registry.get_detail(selected.id)
+        assert detail is not None
+
+        script = agent._build_skill_script(detail.source_code, task, selected.id)
+
+        assert selected.id == "domain/gmail_send"
+        assert 'run("alice@example.com", "测试邮件", "测试邮件内容", sender_email="12412639@mail.sustech.edu.cn", password="8105432a")' in script
+
+    def test_registry_fallback_builds_gmail_send_script_with_che_sender_login(self):
+        task = "gmail发送邮件，发件邮箱是che53438@gmail.com，密码是8105432a，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”"
+        registry = SkillRegistry(library_dir="src/skill_library")
+        registry.load_from_yaml()
+        agent = AgentLoop(max_steps=3)
+
+        skills = registry.search(query=task)
+        selected = agent._select_best_skill(skills, task)
+        detail = registry.get_detail(selected.id)
+        assert detail is not None
+
+        script = agent._build_skill_script(detail.source_code, task, selected.id)
+
+        assert selected.id == "domain/gmail_send"
+        assert 'run("12412639@mail.sustech.edu.cn", "测试邮件", "测试邮件内容", sender_email="che53438@gmail.com", password="8105432a")' in script
+
     def test_build_xiaohongshu_publish_script_passes_style_and_schedule(self):
         agent = AgentLoop(max_steps=3)
         source = "def run(content=None, **kwargs):\n    log(content)"
@@ -595,6 +714,41 @@ class TestGitHubLoginScript:
         )
 
         assert selected.id == "domain/gmail_login"
+
+    def test_select_gmail_send_beats_gmail_login_and_inbox(self):
+        from src.skill_library.skill_base import SkillMeta
+
+        agent = AgentLoop(max_steps=3)
+        skills = [
+            SkillMeta(
+                id="domain/gmail_inbox",
+                name="Gmail 收件箱",
+                type="domain",
+                triggers=["gmail", "谷歌邮箱", "邮件", "收件箱"],
+                url_patterns=["mail.google.com"],
+            ),
+            SkillMeta(
+                id="domain/gmail_login",
+                name="Gmail 登录",
+                type="domain",
+                triggers=["gmail", "谷歌邮箱", "登录", "账号", "邮箱", "密码", "验证码"],
+                url_patterns=["mail.google.com", "accounts.google.com"],
+            ),
+            SkillMeta(
+                id="domain/gmail_send",
+                name="Gmail 发送邮件",
+                type="domain",
+                triggers=["gmail发送邮件", "gmail 发邮件", "发送邮件", "发邮件", "收件人", "send email"],
+                url_patterns=["mail.google.com"],
+            ),
+        ]
+
+        selected = agent._select_best_skill(
+            skills,
+            "Gmail发送邮件，收件人是alice@example.com，标题是测试标题，正文是测试正文",
+        )
+
+        assert selected.id == "domain/gmail_send"
 
     def test_select_bilibili_publish_beats_login_and_search(self):
         from src.skill_library.skill_base import SkillMeta
