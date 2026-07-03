@@ -21,6 +21,7 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -47,8 +48,7 @@ from src.core.script_engine import get_script_engine
 from src.core.script_generator import ScriptGenerator
 from src.core.skill_router import SkillDecision, SkillRouter, get_skill_router
 from src.core.task_splitter import TaskGroup, TaskSplitter, get_task_splitter
-from src.core.vision import get_vision_module
-# from src.core.vision import VisionModule, get_vision_module  # 暂时禁用
+from src.core.vision import VisionModule, get_vision_module
 from src.layer_2.controls import get_controls_exports
 from src.logging import bind_context, get_logger, log_timing
 from src.skill_library.registry import SkillRegistry, get_skill_registry
@@ -775,12 +775,6 @@ class AgentLoop:
         使用 ScriptGenerator 进行意图解析和脚本生成。
         """
         return self._script_generator.generate(task, page_summary)
-
-    def _extract_site(self, url: str) -> str:
-        if email_match and password_match:
-            password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
-            return email_match.group(1), password
-        return AgentLoop._extract_login_credentials(task)
 
     @staticmethod
     def _extract_gmail_send_fields(task: str) -> tuple[str | None, str | None, str | None]:

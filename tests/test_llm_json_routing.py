@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 
 from src.core.agent_loop import AgentLoop
 from src.core.intent_parser import LLMIntentParser
+from src.core.llm_client import LLMClient, LLMConfig
 from src.core.llm_utils import chat_json_with_retry
 from src.core.skill_router import SkillRouter, SkillRouterInfo
 
@@ -66,6 +68,24 @@ def test_chat_json_with_retry_does_not_retry_api_failures():
         chat_json_with_retry(client, "pick a skill")
 
     assert len(client.calls) == 1
+
+
+def test_llm_client_logs_structured_json_response(caplog, monkeypatch):
+    client = LLMClient(
+        LLMConfig(provider="openai", api_key="test-key", model="test-model")
+    )
+    monkeypatch.setattr(
+        client,
+        "_call_openai",
+        lambda *args: '{"skill_id": "domain/google_search", "confidence": 0.92}',
+    )
+
+    with caplog.at_level(logging.INFO, logger="src.core.llm_client"):
+        result = client.chat_json("pick a skill")
+
+    assert result == {"skill_id": "domain/google_search", "confidence": 0.92}
+    assert "AI API JSON response (openai/test-model)" in caplog.text
+    assert '"skill_id": "domain/google_search"' in caplog.text
 
 
 def test_intent_parser_uses_chat_json_schema():

@@ -28,4 +28,12 @@ bilibili账号，电话号码是13574133406，在视频https://www.bilibili.com/
 gmail发送邮件，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”
 gmail发送邮件，发件邮箱是che53438@gmail.com，密码是8105432a，收件邮箱是12412639@mail.sustech.edu.cn，标题是“测试邮件”，内容是“测试邮件内容”
 gmail登录12412639@mail.sustech.edu.cn，密码是8105432a
-
+gmail邮箱发送邮件，收件箱是12412639@mail.sustech.edu.cn，标题是wfegrwtbe，内容是dfeqrwverB
+帮我发布怎么看小红书，在知乎上。
+帮我搜索在小红书上有哪些典型的人群，在知乎上。
+帮我搜索怎么看小红书，在知乎上。
+帮我发布怎么看知乎，在小红书上。
+帮我搜索怎么看知乎，在小红书上。
+WPS写一个docx文章，标题是“edewvr”，内容是“wewret”，导出为PDF，路径是D:tmptest.pdf，字体是宋体14号(x未完成)
+WPS写一个文章，标题是“edewvr”，内容是“wewret”，导出为PDF，路径是"D:/tmp/test.pdf"，字体是宋体14号
+WPS，标题“edewvr”，内容是“wewret”，，路径是"D:/tmp/test.pdf"，字体是斜体红色宋体14，插入图片"D:\Users\qq275\Pictures\Screenshots\屏幕截图 2026-04-07 180134.png"
