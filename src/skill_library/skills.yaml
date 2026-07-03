@@ -24,7 +24,12 @@ skills:
   - id: "domain/baidu_search"
     name: "百度搜索"
     type: "domain"
+    platform: "baidu"
+    action: "search"
     triggers: ["百度", "baidu", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:百度|baidu)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:百度|baidu)(?:上)?$"
     url_patterns: ["baidu.com"]
     description: "在百度搜索关键词并返回结果"
     version: "1.0.0"
@@ -42,7 +47,12 @@ skills:
   - id: "domain/google_search"
     name: "Google 搜索"
     type: "domain"
+    platform: "google"
+    action: "search"
     triggers: ["google", "谷歌", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:google|谷歌)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:google|谷歌)(?:上)?$"
     url_patterns: ["google.com"]
     description: "在 Google 搜索关键词"
     version: "1.0.0"
@@ -59,7 +69,12 @@ skills:
   - id: "domain/bing_search"
     name: "Bing 搜索"
     type: "domain"
+    platform: "bing"
+    action: "search"
     triggers: ["bing", "必应", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:bing|必应)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:bing|必应)(?:上)?$"
     url_patterns: ["bing.com"]
     description: "在 Bing 搜索关键词"
     version: "1.0.0"
@@ -104,7 +119,13 @@ skills:
   - id: "domain/github_search"
     name: "GitHub 搜索"
     type: "domain"
+    platform: "github"
+    action: "search"
     triggers: ["github", "搜索", "search", "仓库", "repo"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:github)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:github)(?:上)?$"
+      - "(?:github)(?:上)?\\s*(?:找|查找)\\s*(.+)"
     url_patterns: ["github.com/search"]
     description: "在 GitHub 搜索仓库/代码/用户"
     version: "1.0.0"
@@ -136,7 +157,12 @@ skills:
   - id: "domain/amazon_search"
     name: "Amazon 搜索"
     type: "domain"
+    platform: "amazon"
+    action: "search"
     triggers: ["amazon", "亚马逊", "购物", "商品"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:amazon|亚马逊)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:amazon|亚马逊)(?:上)?$"
     url_patterns: ["amazon.com"]
     description: "在 Amazon 搜索商品"
     version: "1.0.0"
@@ -217,7 +243,7 @@ skills:
       - "compose email"
       - "Compose"
     url_patterns: ["mail.google.com"]
-    description: "检查 Gmail 是否已登录，必要时等待用户手动登录，然后点击 Compose，填写收件人、标题和正文并发送"
+    description: "检查 Gmail 是否已登录，必要时等待用户手动登录，然后点击 Compose，点击写信窗口右上角 Full screen / Pop-out 放大图标，再填写收件人、标题和正文并发送"
     version: "1.0.0"
     examples:
       - "Gmail发送邮件，收件人是alice@example.com，标题是测试标题，正文是测试正文"
@@ -272,7 +298,12 @@ skills:
   - id: "domain/youtube_search"
     name: "YouTube 搜索"
     type: "domain"
+    platform: "youtube"
+    action: "search"
     triggers: ["youtube", "油管", "视频", "搜索"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:youtube|油管)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:youtube|油管)(?:上)?$"
     url_patterns: ["youtube.com"]
     description: "在 YouTube 搜索视频"
     version: "1.0.0"
@@ -288,7 +319,12 @@ skills:
   - id: "domain/bilibili_search"
     name: "Bilibili 搜索"
     type: "domain"
+    platform: "bilibili"
+    action: "search"
     triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "视频", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:bilibili|B站|b站|哔哩哔哩|哔哩)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:bilibili|B站|b站|哔哩哔哩|哔哩)(?:上)?$"
     url_patterns: ["bilibili.com"]
     description: "在 Bilibili 搜索视频、番剧、用户和相关内容"
     version: "1.0.0"
@@ -543,7 +579,12 @@ skills:
   - id: "domain/weibo_search"
     name: "微博搜索"
     type: "domain"
+    platform: "weibo"
+    action: "search"
     triggers: ["微博", "weibo", "搜索"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:微博|weibo)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:微博|weibo)(?:上)?$"
     url_patterns: ["weibo.com"]
     description: "在微博搜索"
     version: "1.0.0"
@@ -559,7 +600,12 @@ skills:
   - id: "domain/taobao_search"
     name: "淘宝搜索"
     type: "domain"
+    platform: "taobao"
+    action: "search"
     triggers: ["淘宝", "taobao", "搜索", "问答"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:淘宝|taobao)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:淘宝|taobao)(?:上)?$"
     url_patterns: ["taobao.com"]
     description: "在淘宝搜索"
     version: "1.0.0"
@@ -575,7 +621,12 @@ skills:
   - id: "domain/doubao_search"
     name: "豆包搜索"
     type: "domain"
+    platform: "doubao"
+    action: "search"
     triggers: ["豆包", "doubao", "搜索", "问答"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:豆包|doubao)(?:上)?\\s*(?:搜索|搜|查找|查询|查|问|问答|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|问|问答|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:豆包|doubao)(?:上)?$"
     url_patterns: ["doubao.com"]
     description: "在豆包搜索"
     version: "1.0.0"
@@ -591,7 +642,12 @@ skills:
   - id: "domain/csnd_search"
     name: "CSDN 搜索"
     type: "domain"
+    platform: "csdn"
+    action: "search"
     triggers: ["csnd", "csdn", "搜索", "问答"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:csdn|csnd)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:csdn|csnd)(?:上)?$"
     url_patterns: ["csdn.net"]
     description: "在 CSDN 搜索技术文章"
     version: "1.0.0"
@@ -607,7 +663,12 @@ skills:
   - id: "domain/xiaohongshu_search"
     name: "小红书搜索"
     type: "domain"
+    platform: "xiaohongshu"
+    action: "search"
     triggers: ["xiaohongshu", "小红书", "小红书搜索", "小红书 搜索", "小红书上找", "搜索小红书"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:小红书|xiaohongshu|xhs|rednote)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:小红书|xiaohongshu|xhs|rednote)(?:上)?[。.!！?？\\s]*$"
     url_patterns: ["xiaohongshu.com"]
     description: "在小红书搜索笔记和内容"
     version: "1.0.0"
@@ -665,7 +726,12 @@ skills:
   - id: "domain/zhihu_search"
     name: "知乎搜索"
     type: "domain"
-    triggers: ["知乎 搜索"]
+    platform: "zhihu"
+    action: "search"
+    triggers: ["知乎搜索", "知乎 搜索", "在知乎搜索", "知乎上搜", "知乎搜", "搜索知乎", "zhihu", "zhihu search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:知乎|zhihu)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:知乎|zhihu)(?:上)?[。.!！?？\\s]*$"
     url_patterns: ["zhihu.com"]
     description: "在知乎搜索"
     version: "1.0.0"
@@ -729,60 +795,6 @@ skills:
           - "(?:在|到)?知乎(?:上)?(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
           - "知乎\\s*(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
           - "(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
-
-  # ──────────────────────────────────────────────
-  # 通用交互模板
-  # ──────────────────────────────────────────────
-
-  - id: "interaction/login_flow"
-    name: "通用登录"
-    type: "interaction"
-    triggers: ["登录", "login", "sign in", "signin"]
-    url_patterns: []
-    description: "通用登录流程：填写用户名密码并提交"
-    version: "1.0.0"
-    examples:
-      - "登录这个网站"
-      - "帮我登录当前页面的账号"
-
-  - id: "interaction/search_flow"
-    name: "通用搜索"
-    type: "interaction"
-    triggers: ["搜索", "search", "查找", "find"]
-    url_patterns: []
-    description: "通用搜索流程：输入关键词并点击搜索"
-    version: "1.0.0"
-    examples:
-      - "搜索一下这个网站"
-      - "在当前页面搜索"
-    params:
-      keyword:
-        type: keyword
-        required: true
-        description: "搜索关键词"
-
-  - id: "interaction/form_fill"
-    name: "通用表单填写"
-    type: "interaction"
-    triggers: ["表单", "form", "填写", "fill", "注册", "register"]
-    url_patterns: []
-    description: "通用表单填写：批量填写多个表单字段"
-    version: "1.0.0"
-    examples:
-      - "帮我填写这个表单"
-      - "注册一个账号"
-
-  - id: "interaction/pagination"
-    name: "通用分页翻页"
-    type: "interaction"
-    triggers: ["分页", "pagination", "翻页", "next", "下一页"]
-    url_patterns: []
-    description: "通用分页翻页：遍历多页内容"
-    version: "1.0.0"
-    examples:
-      - "翻到下一页"
-      - "继续浏览下一页"
-
 
 # ──────────────────────────────────────────────
 # sources 段 -- 文件映射
@@ -911,21 +923,4 @@ sources:
 
   - id: "domain/csnd_search"
     file: "search/csnd_search.py"
-    entry: "run"
-
- 
-  - id: "interaction/login_flow"
-    file: "others/login_flow.py"
-    entry: "run"
-
-  - id: "interaction/search_flow"
-    file: "search/search_flow.py"
-    entry: "run"
-
-  - id: "interaction/form_fill"
-    file: "others/form_fill.py"
-    entry: "run"
-
-  - id: "interaction/pagination"
-    file: "others/pagination.py"
     entry: "run"
