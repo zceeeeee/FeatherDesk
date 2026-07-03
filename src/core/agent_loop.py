@@ -21,7 +21,6 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -47,7 +46,9 @@ from src.core.llm_utils import chat_json_with_retry
 from src.core.script_engine import get_script_engine
 from src.core.script_generator import ScriptGenerator
 from src.core.skill_router import SkillDecision, SkillRouter, get_skill_router
-from src.core.vision import VisionModule, get_vision_module
+from src.core.task_splitter import TaskSplitter, get_task_splitter
+from src.core.vision import get_vision_module
+# from src.core.vision import VisionModule, get_vision_module  # 暂时禁用
 from src.layer_2.controls import get_controls_exports
 from src.logging import bind_context, get_logger, log_timing
 from src.skill_library.registry import SkillRegistry, get_skill_registry
@@ -128,6 +129,8 @@ class AgentTaskResult:
     final_url: str = ""
     output: str = ""
     error: str = ""
+    sub_tasks: list[str] = field(default_factory=list)
+    sub_results: list["AgentTaskResult"] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -167,16 +170,81 @@ class AgentLoop:
         self._script_generator = ScriptGenerator()
         self._experience: ExperienceManager | None = None
         self._llm_parser: LLMIntentParser | None = None
+        self._task_splitter: TaskSplitter | None = None
 
     def run(self, task: str) -> AgentTaskResult:
         """执行一个自然语言任务。
 
+        支持多命令拆分：用户输入用句号分隔的多个命令时，自动拆分并顺序执行。
+
         Args:
             task: 用户的任务描述，如"帮我在百度搜索 Python 教程"。
+                  支持多命令: "打开百度。搜索Python教程。截个图"。
 
         Returns:
             AgentTaskResult 包含执行步骤、结果和输出。
         """
+        # 初始化模块（确保 TaskSplitter 可用）
+        self._init_modules()
+
+        # 拆分任务
+        sub_tasks = self._task_splitter.split(task)  # type: ignore[union-attr]
+
+        # 单命令 → 走原逻辑（零开销）
+        if len(sub_tasks) <= 1:
+            return self._run_single(task)
+
+        # 多命令 → 顺序执行
+        logger.info("Multi-command detected: %d sub-tasks", len(sub_tasks))
+        return self._run_multi(sub_tasks)
+
+    def _run_multi(self, sub_tasks: list[str]) -> AgentTaskResult:
+        """顺序执行多个子任务，共享浏览器实例，合并结果。"""
+        combined = AgentTaskResult(
+            success=True,
+            task=" | ".join(sub_tasks),
+            sub_tasks=sub_tasks,
+        )
+
+        for i, sub_task in enumerate(sub_tasks):
+            logger.info("Running sub-task %d/%d: %s", i + 1, len(sub_tasks), sub_task)
+            sub_result = self._run_single(sub_task)
+            combined.sub_results.append(sub_result)
+            combined.steps.extend(sub_result.steps)
+
+            if not sub_result.success:
+                combined.success = False
+                combined.error = f"子任务 {i + 1}/{len(sub_tasks)} 失败: {sub_task}"
+                logger.warning("Sub-task %d failed: %s", i + 1, sub_task)
+                break
+
+        # 汇总最终 URL
+        try:
+            bm = get_browser_manager()
+            if bm.is_alive():
+                combined.final_url = bm.get_page().url
+        except Exception:
+            pass
+
+        # 汇总输出
+        outputs = []
+        for i, sub_result in enumerate(combined.sub_results):
+            status = "✓" if sub_result.success else "✗"
+            outputs.append(f"[{status}] 子任务 {i + 1}: {sub_tasks[i]}")
+            if sub_result.output:
+                outputs.append(f"  {sub_result.output}")
+        combined.output = "\n".join(outputs)
+
+        logger.info(
+            "Multi-command finished: success=%s sub_tasks=%d/%d",
+            combined.success,
+            sum(1 for r in combined.sub_results if r.success),
+            len(sub_tasks),
+        )
+        return combined
+
+    def _run_single(self, task: str) -> AgentTaskResult:
+        """执行单个任务（原始状态机逻辑）。"""
         result = AgentTaskResult(success=False, task=task)
         state = AgentState.OBSERVE
         step_number = 0
@@ -207,9 +275,6 @@ class AgentLoop:
                 logger.error("Agent task aborted: browser not launched")
                 self._emit_task_after(result, task_id)
                 return result
-
-            # 初始化模块
-            self._init_modules()
 
             with log_timing("agent_task", task=task) as task_meta:
                 while state not in (AgentState.DONE, AgentState.FAILED):
@@ -325,6 +390,14 @@ class AgentLoop:
             self._skill_router = get_skill_router(
                 library_dir=self._library_dir, llm_caller=llm_adapter
             )
+
+        if self._task_splitter is None:
+            llm_caller = (
+                _LLMCallerAdapter(self._llm_parser)
+                if self._llm_parser and self._llm_parser.available
+                else None
+            )
+            self._task_splitter = get_task_splitter(llm_caller=llm_caller)
 
     # -------------------------------------------------------------------
     # Event emission helpers
@@ -452,7 +525,12 @@ class AgentLoop:
     # -------------------------------------------------------------------
 
     def _do_plan(self, step: AgentStep, task: str) -> AgentState:
-        """根据任务和页面状态，决定下一步。"""
+        """根据任务和页面状态，决定下一步。
+
+        两级降级：
+        1. SkillRouter 严格关键词匹配（确定时才命中）
+        2. LLM 意图解析 → 从 skills.yaml 找技能脚本
+        """
         logger.debug("PLAN: planning action for step %d", step.step_number)
 
         before_event = self._bus.emit(
@@ -471,7 +549,7 @@ class AgentLoop:
             logger.info("PLAN: cancelled by hook")
             return AgentState.FAILED
 
-        # 1. 两阶段路由：关键词快筛 + LLM 精排
+        # ── 1. SkillRouter 严格关键词匹配 ──
         with log_timing("agent_plan_skill_router") as meta:
             page_context = {
                 "url": get_browser_manager().get_page().url,
@@ -511,34 +589,40 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        if decision.skill and not decision.script:
-            logger.info(
-                "PLAN: router matched '%s' but script generation failed, falling through",
-                decision.skill.name,
-            )
+        # ── 2. LLM 意图解析 → 找技能脚本 ──
+        with log_timing("agent_plan_llm_intent") as meta:
+            llm_decision = self._find_skill_via_llm(task)
+            meta["matched"] = llm_decision is not None and llm_decision.skill is not None
 
-        # 2. 查找已保存的脚本（经验复用）
-        saved_script = self._experience.find_script(task)
-        if saved_script and saved_script.script:
-            step.action = f"复用已保存脚本: {saved_script.id}"
-            step.script = saved_script.script
-            step.result = f"找到已保存脚本 (成功率: {saved_script.success_rate:.0%})"
-            logger.info("PLAN: reusing saved script '%s'", saved_script.id)
+        if llm_decision and llm_decision.skill and llm_decision.script:
+            step.action = f"使用技能: {llm_decision.skill.name}"
+            step.script = llm_decision.script
+            step.result = (
+                f"LLM 意图命中: {llm_decision.skill.name} "
+                f"(置信度: {llm_decision.confidence:.2f})"
+            )
+            logger.info(
+                "PLAN: LLM intent matched '%s' (confidence=%.2f)",
+                llm_decision.skill.name,
+                llm_decision.confidence,
+            )
             self._bus.emit(
                 Event(
                     name=EVENT_AGENT_PLAN,
                     phase=Phase.AFTER,
                     data={
                         "step_number": step.step_number,
-                        "source": "experience",
-                        "script_id": saved_script.id,
+                        "source": "llm_intent",
+                        "skill_id": llm_decision.skill.id,
+                        "skill_name": llm_decision.skill.name,
+                        "confidence": llm_decision.confidence,
                     },
                     result=step.result,
                 )
             )
             return AgentState.ACT
 
-        # 3. 未命中 → 规则生成脚本
+        # ── 3. 规则生成脚本 ──
         script = self._generate_script(task, step.page_summary)
         if script:
             step.action = "生成临时脚本"
@@ -555,7 +639,7 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        # 5. 无法生成脚本
+        # ── 4. 无法规划 ──
         step.result = "无法规划行动"
         logger.warning("PLAN: no action could be planned")
         self._bus.emit(
@@ -575,291 +659,7 @@ class AgentLoop:
         """
         return self._script_generator.generate(task, page_summary)
 
-    def _build_skill_script(self, source_code: str, task: str, skill_id: str) -> str:
-        """将技能源码转换为可执行脚本。
-
-        技能源码通常只定义函数（如 def run(keyword)），需要追加调用语句。
-        从任务描述中提取参数，自动调用函数。
-        """
-        import re
-
-        if skill_id == "domain/gmail_login":
-            credentials = self._extract_gmail_credentials(task)
-            if not credentials:
-                return (
-                    f"{source_code}\n\n"
-                    "raise ValueError('Gmail login requires email and password')"
-                )
-            email, password = credentials
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"run({json.dumps(email, ensure_ascii=False)}, "
-                f"{json.dumps(password, ensure_ascii=False)})"
-            )
-
-        if skill_id == "domain/gmail_send":
-            recipient, subject, body = self._extract_gmail_send_fields(task)
-            sender_email, password = self._extract_gmail_send_account(task)
-            missing = []
-            if not recipient:
-                missing.append("recipient")
-            if not subject:
-                missing.append("subject")
-            if not body:
-                missing.append("body")
-            if missing:
-                return (
-                    f"{source_code}\n\n"
-                    f"raise ValueError('Gmail send requires {', '.join(missing)}')"
-                )
-            kwargs = []
-            if sender_email and password:
-                kwargs.append(f"sender_email={json.dumps(sender_email, ensure_ascii=False)}")
-                kwargs.append(f"password={json.dumps(password, ensure_ascii=False)}")
-            kwargs_text = ", " + ", ".join(kwargs) if kwargs else ""
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"_result = run({json.dumps(recipient, ensure_ascii=False)}, "
-                f"{json.dumps(subject, ensure_ascii=False)}, "
-                f"{json.dumps(body, ensure_ascii=False)}{kwargs_text})\n"
-                "if isinstance(_result, dict) and not _result.get('success', True):\n"
-                "    raise RuntimeError(_result.get('error') or str(_result))"
-            )
-
-        if skill_id == "domain/github_login":
-            credentials = self._extract_login_credentials(task)
-            if not credentials:
-                return (
-                    f"{source_code}\n\n"
-                    "raise ValueError('GitHub login requires username and password')"
-                )
-            username, password = credentials
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"run({json.dumps(username, ensure_ascii=False)}, "
-                f"{json.dumps(password, ensure_ascii=False)})"
-            )
-
-        if skill_id == "domain/bilibili_publish":
-            phone_number = self._extract_phone_number(task)
-            title, body = self._extract_bilibili_publish_fields(task)
-            missing = []
-            if not phone_number:
-                missing.append("phone number")
-            if not title:
-                missing.append("title")
-            if not body:
-                missing.append("body")
-            if missing:
-                return (
-                    f"{source_code}\n\n"
-                    f"raise ValueError('Bilibili publish requires {', '.join(missing)}')"
-                )
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"run({json.dumps(phone_number, ensure_ascii=False)}, "
-                f"{json.dumps(title, ensure_ascii=False)}, "
-                f"{json.dumps(body, ensure_ascii=False)})"
-            )
-
-        if skill_id == "domain/bilibili_comment":
-            phone_number = self._extract_phone_number(task)
-            comment_text = self._extract_comment_text(task)
-            video_url = self._extract_video_url(task)
-            missing = []
-            if not phone_number:
-                missing.append("phone number")
-            if not comment_text:
-                missing.append("comment text")
-            if missing:
-                return (
-                    f"{source_code}\n\n"
-                    f"raise ValueError('Bilibili comment requires {', '.join(missing)}')"
-                )
-            if video_url:
-                return (
-                    f"{source_code}\n\n# 自动调用\n"
-                    f"run({json.dumps(phone_number, ensure_ascii=False)}, "
-                    f"{json.dumps(comment_text, ensure_ascii=False)}, "
-                    f"video_url={json.dumps(video_url, ensure_ascii=False)})"
-                )
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"run({json.dumps(phone_number, ensure_ascii=False)}, "
-                f"{json.dumps(comment_text, ensure_ascii=False)})"
-            )
-
-        if skill_id == "domain/xiaohongshu_comment":
-            comment_text = self._extract_comment_text(task)
-            note_url = self._extract_xiaohongshu_note_url(task)
-            missing = []
-            if not note_url:
-                missing.append("note url")
-            if not comment_text:
-                missing.append("comment text")
-            if missing:
-                return (
-                    f"{source_code}\n\n"
-                    f"raise ValueError('Xiaohongshu comment requires {', '.join(missing)}')"
-                )
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"_result = run({json.dumps(comment_text, ensure_ascii=False)}, "
-                f"note_url={json.dumps(note_url, ensure_ascii=False)})\n"
-                "if isinstance(_result, dict) and not _result.get('success', True):\n"
-                "    raise RuntimeError(_result.get('error') or str(_result))"
-            )
-
-        if skill_id == "domain/xiaohongshu_publish":
-            phone_number = self._extract_phone_number(task)
-            image_path = self._extract_xiaohongshu_media_path(task, "image")
-            video_path = self._extract_xiaohongshu_media_path(task, "video")
-            mode = self._extract_xiaohongshu_publish_mode(task, image_path, video_path)
-            title, content = self._extract_xiaohongshu_publish_fields(task)
-            cover_style = self._extract_xiaohongshu_cover_style(task)
-            enable_schedule, schedule_time = self._extract_xiaohongshu_schedule(task)
-            missing = []
-            if mode in {"text_to_image", "article"} and not content:
-                missing.append("content")
-            if mode == "video" and not video_path:
-                missing.append("video_path")
-            if mode == "image_upload" and not image_path:
-                missing.append("image_path")
-            if missing:
-                return (
-                    f"{source_code}\n\n"
-                    f"raise ValueError('Xiaohongshu publish requires {', '.join(missing)}')"
-                )
-            args = [json.dumps(content, ensure_ascii=False) if content is not None else "None"]
-            kwargs = [f"mode={json.dumps(mode, ensure_ascii=False)}"]
-            if phone_number:
-                kwargs.append(f"phone_number={json.dumps(phone_number, ensure_ascii=False)}")
-            if image_path:
-                kwargs.append(f"image_path={json.dumps(image_path, ensure_ascii=False)}")
-            if video_path:
-                kwargs.append(f"video_path={json.dumps(video_path, ensure_ascii=False)}")
-            if title:
-                kwargs.append(f"title={json.dumps(title, ensure_ascii=False)}")
-            if cover_style:
-                kwargs.append(f"cover_style={json.dumps(cover_style, ensure_ascii=False)}")
-            if enable_schedule:
-                kwargs.append("enable_schedule=True")
-            if schedule_time:
-                kwargs.append(f"schedule_time={json.dumps(schedule_time, ensure_ascii=False)}")
-            call_args = ", ".join(args + kwargs)
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"_result = run({call_args})\n"
-                "if isinstance(_result, dict) and not _result.get('success', True):\n"
-                "    raise RuntimeError(_result.get('error') or str(_result))"
-            )
-
-        if skill_id == "domain/xiaohongshu_publish":
-            phone_number = self._extract_phone_number(task)
-            content = self._extract_xiaohongshu_publish_content(task)
-            if not content:
-                return (
-                    f"{source_code}\n\n"
-                    "raise ValueError('Xiaohongshu publish requires content')"
-                )
-            if phone_number:
-                return (
-                    f"{source_code}\n\n# 自动调用\n"
-                    f"run({json.dumps(content, ensure_ascii=False)}, "
-                    f"phone_number={json.dumps(phone_number, ensure_ascii=False)})"
-                )
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"run({json.dumps(content, ensure_ascii=False)})"
-            )
-
-        phone_login_sites = {
-            "domain/xiaohongshu_login": "Xiaohongshu",
-            "domain/douyin_login": "Douyin",
-            "domain/bilibili_login": "Bilibili",
-        }
-        if skill_id in phone_login_sites:
-            phone_number = self._extract_phone_number(task)
-            if not phone_number:
-                site_name = phone_login_sites[skill_id]
-                return (
-                    f"{source_code}\n\n"
-                    f"raise ValueError('{site_name} login requires phone number')"
-                )
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"run({json.dumps(phone_number, ensure_ascii=False)})"
-            )
-
-        if skill_id == "domain/zhihu_send":
-            content = self._extract_zhihu_publish_content(task)
-            if not content:
-                return (
-                    f"{source_code}\n\n"
-                    "raise ValueError('Zhihu publish requires article content')"
-                )
-            return (
-                f"{source_code}\n\n# 自动调用\n"
-                f"run({json.dumps(content, ensure_ascii=False)})"
-            )
-
-        # 提取关键词
-        keyword = self._script_generator._extract_keyword(task)
-        if not keyword:
-            # 关键词提取失败，不降级使用整句话（会导致搜索整个指令文本）
-            # 返回空字符串让 agent loop 走 LLM 兜底路径
-            return ""
-
-        # 检查源码是否已经有独立的 run() 调用（不是 def run 定义）
-        # 去掉 def 语句后，检查是否还有 run( 调用
-        code_without_defs = re.sub(r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code)
-        if "run(" in code_without_defs:
-            # 已经有调用语句，直接返回
-            return source_code
-
-        # 追加调用语句
-        call_script = f"{source_code}\n\n# 自动调用\nrun({json.dumps(keyword, ensure_ascii=False)})"
-        return call_script
-
-    @staticmethod
-    def _extract_login_credentials(task: str) -> tuple[str, str] | None:
-        import re
-
-        def find(patterns: list[str]) -> str | None:
-            for pattern in patterns:
-                match = re.search(pattern, task, re.IGNORECASE)
-                if match:
-                    return match.group(1).strip().strip("'\"`")
-            return None
-
-        username = find(
-            [
-                r"(?:用户名|用户|账号|账户|名称|邮箱|username|user|account|email)\s*(?:是|为|:|：|=)?\s*['\"]?([^'\"\s,，;；。]+)",
-            ]
-        )
-        password = find(
-            [
-                r"(?:密码|口令|password|pass)\s*(?:是|为|:|：|=)?\s*['\"]?([^'\"\s,，;；。]+)",
-            ]
-        )
-        if username and password:
-            return username, password
-        return None
-
-    @staticmethod
-    def _extract_gmail_credentials(task: str) -> tuple[str, str] | None:
-        import re
-
-        email_match = re.search(
-            r"([A-Z0-9._%+-]+@gmail\.com)",
-            task,
-            re.IGNORECASE,
-        )
-        password_match = re.search(
-            r"(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\s,，;；。)）]+)",
-            task,
-            re.IGNORECASE,
-        )
+    def _extract_site(self, url: str) -> str:
         if email_match and password_match:
             password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
             return email_match.group(1), password
@@ -1393,6 +1193,106 @@ class AgentLoop:
 
         # 用 ScriptGenerator 的模板拼装脚本
         return self._script_generator._intent_to_script(intent)
+
+    def _find_skill_via_llm(self, task: str) -> SkillDecision | None:
+        """用 LLM 理解意图，从 skills.yaml 中匹配技能。
+
+        两步流程：
+        1. LLM 根据用户命令从技能名称列表中选出匹配的技能
+        2. LLM 根据用户命令修改技能源码，生成可执行脚本
+
+        Returns:
+            SkillDecision（含 skill 和 script），或 None。
+        """
+        if not self._llm_parser or not self._llm_parser.available:
+            return None
+
+        # 1. 收集所有技能名称
+        all_skills = self._skill_router.list_skills()
+        if not all_skills:
+            return None
+
+        skill_names = "\n".join(
+            f"- {s.id}: {s.name}" for s in all_skills
+        )
+
+        # ── Step 1: 匹配技能 ──
+        match_prompt = (
+            f"用户指令: {task}\n\n"
+            f"可用技能:\n{skill_names}\n\n"
+            f"选出最匹配的技能，只返回技能 id，不要其他文字。"
+        )
+
+        try:
+            raw = self._llm_parser._call_llm(match_prompt)
+            chosen_id = raw.strip().strip('"').strip("'")
+
+            chosen_skill = self._skill_router.get_skill(chosen_id)
+            if not chosen_skill:
+                logger.warning("LLM 意图解析返回未知技能 ID: %s", chosen_id)
+                return None
+
+            # ── Step 2: 获取源码，让 AI 根据用户命令修改 ──
+            source_code = ""
+            if chosen_skill.source_file and self._skill_router._library_dir:
+                source_path = self._skill_router._library_dir / chosen_skill.source_file
+                if source_path.exists():
+                    source_code = source_path.read_text(encoding="utf-8")
+
+            if not source_code:
+                detail = self._registry.get_detail(chosen_id)
+                if detail and detail.source_code:
+                    source_code = detail.source_code
+
+            if not source_code:
+                logger.warning("LLM 命中技能 '%s' 但无法获取源码", chosen_id)
+                return None
+
+            # 检查源码是否已有独立 run() 调用，如果有则直接用
+            import re as _re
+
+            code_without_defs = _re.sub(
+                r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code
+            )
+            if "run(" in code_without_defs:
+                script = source_code
+            else:
+                # 让 AI 根据用户命令修改脚本
+                modify_prompt = (
+                    f"你是一个脚本修改器。根据用户指令，修改下面的 Python 脚本，"
+                    f"使其能正确执行用户的请求。\n\n"
+                    f"用户指令: {task}\n\n"
+                    f"原始脚本:\n```python\n{source_code}\n```\n\n"
+                    f"要求:\n"
+                    f"1. 保留脚本的核心逻辑不变\n"
+                    f"2. 根据用户指令中的具体信息（如关键词、URL、手机号等）"
+                    f"填入 run() 函数的参数\n"
+                    f"3. 如果用户指令中缺少必要参数，保留原始脚本不变\n"
+                    f"4. 只返回修改后的完整 Python 脚本，不要其他文字"
+                )
+
+                script = self._llm_parser._call_llm(modify_prompt).strip()
+
+                # 去掉可能的代码块标记
+                if script.startswith("```"):
+                    lines = script.split("\n")
+                    script = "\n".join(lines[1:])
+                if script.endswith("```"):
+                    script = script[:-3].rstrip()
+
+            logger.info("LLM 意图解析: %s", chosen_id)
+
+            return SkillDecision(
+                skill=chosen_skill,
+                confidence=1.0,
+                reason="LLM 意图解析",
+                source="llm",
+                script=script,
+            )
+
+        except Exception as exc:
+            logger.warning("LLM 意图解析失败: %s", exc)
+            return None
 
     def _extract_site(self, url: str) -> str:
         """从 URL 中提取站点名称。"""

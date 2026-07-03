@@ -210,25 +210,8 @@ class SkillRouter:
 
         top_skill, top_score = candidates[0]
 
-        if len(candidates) > 1 and self._llm_caller:
-            llm_result = self._llm_rank(
-                task,
-                candidates,
-                page_context,
-                force_pick=True,
-            )
-            if llm_result:
-                script = self.build_script(llm_result.skill, task)
-                return SkillDecision(
-                    skill=llm_result.skill,
-                    confidence=llm_result.confidence,
-                    reason=f"多个 trigger 命中，由 LLM 选择: {llm_result.reason}",
-                    source="llm",
-                    script=script,
-                )
-
-        # 单候选且高分 → 直接命中
-        if len(candidates) == 1 or top_score >= 0.8:
+        # 高分 → 直接命中（严格：必须达到阈值，不论候选数量）
+        if top_score >= 0.8:
             script = self.build_script(top_skill, task)
             return SkillDecision(
                 skill=top_skill,
@@ -251,15 +234,8 @@ class SkillRouter:
                     script=script,
                 )
 
-        # 兜底：取关键词得分最高的
-        script = self.build_script(top_skill, task)
-        return SkillDecision(
-            skill=top_skill,
-            confidence=top_score,
-            reason=f"关键词兜底: {top_skill.name}",
-            source="keyword",
-            script=script,
-        )
+        # 未达到确定匹配阈值 → 交给上层 LLM 意图解析
+        return SkillDecision(source="none", reason="关键词未确定匹配")
 
     # -------------------------------------------------------------------
     # Stage 1: 关键词快筛
@@ -645,8 +621,6 @@ class SkillRouter:
                 value = match.group(1).strip()
                 value = value.strip("'\"`“”‘’「」")
                 value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
-                value = value.strip("'\"`“”‘’「」")
-                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
                 if value:
                     return value
 
@@ -695,11 +669,7 @@ class SkillRouter:
                 re.IGNORECASE | re.DOTALL,
             )
             if match:
-                value = match.group(1).strip()
-                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
-                value = value.strip("'\"`“”‘’「」")
-                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
-                return value
+                return match.group(1).strip().strip("'\"`“”‘’「」")
 
         if ptype == "title":
             quoted = re.search(
