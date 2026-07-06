@@ -30,7 +30,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +199,9 @@ class LLMClient:
             max_tokens=max_tokens,
         )
 
-        return self._parse_json(raw)
+        data = self._parse_json(raw)
+        self._log_json_response(data)
+        return data
 
     # -------------------------------------------------------------------
     # OpenAI 兼容 API
@@ -337,6 +339,21 @@ class LLMClient:
                             break
 
         raise RuntimeError(f"Failed to parse JSON from LLM response: {raw[:200]}")
+
+    def _log_json_response(self, data: Dict[str, Any]) -> None:
+        """Print structured AI JSON responses to the backend CLI log."""
+        formatted = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+        logger.info(
+            "AI API JSON response (%s/%s):\n%s",
+            self._config.provider,
+            self._config.model,
+            formatted,
+            extra={
+                "llm_provider": self._config.provider,
+                "llm_model": self._config.model,
+                "llm_json_response": data,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------

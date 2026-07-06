@@ -210,6 +210,20 @@ class SkillRouter:
 
         top_skill, top_score = candidates[0]
 
+        if (
+            top_skill.id == "domain/xiaohongshu_publish"
+            and top_score >= 0.65
+            and re.search(r"(发布内容|发布|发表|发帖).+['\"“‘].+['\"”’]", task, re.DOTALL)
+        ):
+            script = self.build_script(top_skill, task)
+            return SkillDecision(
+                skill=top_skill,
+                confidence=0.85,
+                reason=f"默认发布内容匹配: {top_skill.name}",
+                source="keyword",
+                script=script,
+            )
+
         # 高分 → 直接命中（严格：必须达到阈值，不论候选数量）
         if top_score >= 0.8:
             script = self.build_script(top_skill, task)
@@ -619,8 +633,10 @@ class SkillRouter:
             match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
             if match:
                 value = match.group(1).strip()
-                value = value.strip("'\"`“”‘’「」")
+                quote_chars = "'\"`“”‘’「」"
+                value = value.strip(quote_chars)
                 value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
+                value = value.strip(quote_chars).strip()
                 if value:
                     return value
 

@@ -104,7 +104,7 @@ class TestDataModels:
 
 class TestProviderDetection:
     def test_detect_anthropic(self):
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "key"}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "key"}, clear=True):
             vm = VisionModule(api_key="key")
             assert vm._provider == "anthropic"
 
@@ -125,6 +125,66 @@ class TestProviderDetection:
             os.environ.pop("OPENAI_API_KEY", None)
             with pytest.raises(ValueError, match="未找到"):
                 VisionModule()
+
+    def test_vision_env_overrides_model_and_base_url(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "VISION_PROVIDER": "mimo",
+                "VISION_API_KEY": "vision-key",
+                "VISION_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
+                "VISION_MODEL": "mimo-v2.5",
+            },
+            clear=True,
+        ):
+            vm = VisionModule()
+
+        assert vm._provider == "mimo"
+        assert vm._api_key == "vision-key"
+        assert vm._base_url == "https://token-plan-cn.xiaomimimo.com/v1"
+        assert vm._model == "mimo-v2.5"
+
+    def test_openai_compatible_vision_reuses_llm_model_when_no_vision_model(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "LLM_PROVIDER": "openai",
+                "OPENAI_API_KEY": "openai-key",
+                "OPENAI_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
+                "OPENAI_MODEL": "mimo-v2.5",
+            },
+            clear=True,
+        ):
+            vm = VisionModule()
+
+        assert vm._provider == "openai"
+        assert vm._base_url == "https://token-plan-cn.xiaomimimo.com/v1"
+        assert vm._model == "mimo-v2.5"
+
+    def test_openai_compatible_call_uses_configured_endpoint_and_model(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "VISION_PROVIDER": "mimo",
+                "VISION_API_KEY": "vision-key",
+                "VISION_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
+                "VISION_MODEL": "mimo-v2.5",
+            },
+            clear=True,
+        ):
+            vm = VisionModule()
+
+        response = MagicMock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": '{"summary": "ok"}'}}]
+        }
+        with patch("httpx.post", return_value=response) as mock_post:
+            assert vm._call_openai("prompt", "image") == '{"summary": "ok"}'
+
+        url = mock_post.call_args.args[0]
+        payload = mock_post.call_args.kwargs["json"]
+        assert url == "https://token-plan-cn.xiaomimimo.com/v1/chat/completions"
+        assert payload["model"] == "mimo-v2.5"
 
 
 # ---------------------------------------------------------------------------

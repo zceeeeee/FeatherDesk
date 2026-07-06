@@ -201,6 +201,9 @@ class ConfigManager:
         """将配置应用到环境变量。"""
         vision = self.get_vision_config()
 
+        os.environ["VISION_PROVIDER"] = vision["provider"]
+        os.environ["VISION_BASE_URL"] = vision["base_url"]
+        os.environ["VISION_MODEL"] = vision["model"]
         if vision["api_key"]:
             if vision["provider"] == "anthropic":
                 os.environ["ANTHROPIC_API_KEY"] = vision["api_key"]

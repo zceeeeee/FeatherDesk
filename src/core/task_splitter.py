@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -183,6 +183,8 @@ class TaskSplitter:
         """按中文句号 `。` 和英文句号 `.` 拆分，处理边界情况。"""
         # 先保护 URL 中的点号
         protected = self._protect_urls(task)
+        # 保护本地文件路径中的点号，例如 D:\tmp\test.pdf / D:tmptest.pdf
+        protected = self._protect_file_paths(protected)
         # 保护引号内的句号
         protected = self._protect_quoted(protected)
 
@@ -212,6 +214,21 @@ class TaskSplitter:
             r"https?://[^\s<>\"'“”‘’「」]+",
             replace_url_dot,
             text,
+        )
+
+    def _protect_file_paths(self, text: str) -> str:
+        """Protect local file paths so extensions like .pdf do not split tasks."""
+
+        def replace_path_dot(match: re.Match) -> str:
+            return match.group(0).replace(".", "«DOT»")
+
+        return re.sub(
+            r"(?<![A-Za-z0-9_])[A-Za-z]:(?:[\\/])?"
+            r"[^<>\"'“”‘’「」,，;；。\r\n]+?\."
+            r"(?:pdf|docx?|xlsx?|pptx?|txt|md|jpg|jpeg|png|webp|gif|mp4|mov|avi|mkv)",
+            replace_path_dot,
+            text,
+            flags=re.IGNORECASE,
         )
 
     def _protect_quoted(self, text: str) -> str:

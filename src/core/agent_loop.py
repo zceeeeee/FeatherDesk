@@ -21,6 +21,7 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -47,8 +48,7 @@ from src.core.script_engine import get_script_engine
 from src.core.script_generator import ScriptGenerator
 from src.core.skill_router import SkillDecision, SkillRouter, get_skill_router
 from src.core.task_splitter import TaskGroup, TaskSplitter, get_task_splitter
-from src.core.vision import get_vision_module
-# from src.core.vision import VisionModule, get_vision_module  # 暂时禁用
+from src.core.vision import VisionModule, get_vision_module
 from src.layer_2.controls import get_controls_exports
 from src.logging import bind_context, get_logger, log_timing
 from src.skill_library.registry import SkillRegistry, get_skill_registry
@@ -776,11 +776,144 @@ class AgentLoop:
         """
         return self._script_generator.generate(task, page_summary)
 
-    def _extract_site(self, url: str) -> str:
-        if email_match and password_match:
+    @staticmethod
+    def _extract_login_credentials(task: str) -> tuple[str | None, str | None]:
+        """Compatibility helper for legacy domain login script tests."""
+        import re
+
+        username = None
+        password = None
+        username_match = re.search(
+            r"(?:username|user|用户名|账号)\s*(?:是|为|:|：|=)?\s*([^\s,，;；]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if username_match:
+            username = username_match.group(1).strip().strip("'\"`“”‘’")
+
+        password_match = re.search(
+            r"(?:password|pass|密码|口令)\s*(?:是|为|:|：|=)?\s*([^\s,，;；。)）]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if password_match:
+            password = password_match.group(1).strip().strip("'\"`“”‘’")
+
+        return username, password
+
+    @staticmethod
+    def _extract_gmail_credentials(task: str) -> tuple[str | None, str | None]:
+        """Compatibility helper for Gmail login commands."""
+        import re
+
+        email = None
+        email_match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", task, re.I)
+        if email_match:
+            email = email_match.group(0).strip()
+
+        password = None
+        password_match = re.search(
+            r"(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\s,，;；。)）]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if password_match:
             password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
-            return email_match.group(1), password
-        return AgentLoop._extract_login_credentials(task)
+
+        return email, password
+
+    def _build_skill_script(self, source_code: str, task: str, skill_id: str) -> str:
+        """Legacy script builder kept for older tests and external callers."""
+        import json as _json
+
+        def q(value: str | None) -> str:
+            return _json.dumps(value or "", ensure_ascii=False)
+
+        def append(call: str) -> str:
+            return f"{source_code}\n\n# 自动调用\n{call}"
+
+        if skill_id == "domain/github_login":
+            username, password = self._extract_login_credentials(task)
+            return append(f"run({q(username)}, {q(password)})")
+
+        if skill_id == "domain/gmail_login":
+            email, password = self._extract_gmail_credentials(task)
+            return append(f"run({q(email)}, {q(password)})")
+
+        if skill_id == "domain/gmail_send":
+            recipient, subject, body = self._extract_gmail_send_fields(task)
+            sender_email, password = self._extract_gmail_send_account(task)
+            kwargs = []
+            if sender_email:
+                kwargs.append(f"sender_email={q(sender_email)}")
+            if password:
+                kwargs.append(f"password={q(password)}")
+            args = [q(recipient), q(subject), q(body), *kwargs]
+            return append(f"run({', '.join(args)})")
+
+        if skill_id in {
+            "domain/xiaohongshu_login",
+            "domain/douyin_login",
+            "domain/bilibili_login",
+        }:
+            return append(f"run({q(self._extract_phone_number(task))})")
+
+        if skill_id == "domain/xiaohongshu_publish":
+            image_path = self._extract_xiaohongshu_media_path(task, "image")
+            video_path = self._extract_xiaohongshu_media_path(task, "video")
+            mode = self._extract_xiaohongshu_publish_mode(task, image_path, video_path)
+            title, body = self._extract_xiaohongshu_publish_fields(task)
+            content = body or self._extract_xiaohongshu_publish_content(task) or title
+            phone = self._extract_phone_number(task)
+            cover_style = self._extract_xiaohongshu_cover_style(task)
+            enable_schedule, schedule_time = self._extract_xiaohongshu_schedule(task)
+
+            args = [q(content)]
+            kwargs = [f"mode={q(mode)}"]
+            if phone:
+                kwargs.append(f"phone_number={q(phone)}")
+            if image_path:
+                kwargs.append(f"image_path={q(image_path)}")
+            if video_path:
+                kwargs.append(f"video_path={q(video_path)}")
+            if title:
+                kwargs.append(f"title={q(title)}")
+            if body and body != content:
+                kwargs.append(f"body={q(body)}")
+            if cover_style:
+                kwargs.append(f"cover_style={q(cover_style)}")
+            if enable_schedule:
+                kwargs.append("enable_schedule=True")
+            if schedule_time:
+                kwargs.append(f"schedule_time={q(schedule_time)}")
+            return append(f"run({', '.join([*args, *kwargs])})")
+
+        if skill_id == "domain/xiaohongshu_comment":
+            comment = self._extract_comment_text(task)
+            note_url = self._extract_xiaohongshu_note_url(task)
+            args = [q(comment)]
+            if note_url:
+                args.append(f"note_url={q(note_url)}")
+            return append(f"run({', '.join(args)})")
+
+        if skill_id == "domain/bilibili_publish":
+            title, body = self._extract_bilibili_publish_fields(task)
+            phone = self._extract_phone_number(task)
+            return append(f"run({q(phone)}, {q(title)}, {q(body)})")
+
+        if skill_id == "domain/bilibili_comment":
+            phone = self._extract_phone_number(task)
+            comment = self._extract_comment_text(task)
+            video_url = self._extract_video_url(task)
+            args = [q(phone), q(comment)]
+            if video_url:
+                args.append(f"video_url={q(video_url)}")
+            return append(f"run({', '.join(args)})")
+
+        skill = self._skill_router.get_skill(skill_id)
+        if skill and skill.params:
+            return self._skill_router._build_parametrized_script(source_code, skill, task)
+        return self._skill_router._build_keyword_script(source_code, task)
 
     @staticmethod
     def _extract_gmail_send_fields(task: str) -> tuple[str | None, str | None, str | None]:

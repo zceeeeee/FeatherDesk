@@ -88,6 +88,97 @@ skills:
         description: "搜索关键词"
 
   # ──────────────────────────────────────────────
+  # 本地文档 / 导出
+  # ──────────────────────────────────────────────
+
+  - id: "domain/wps_writer_export"
+    name: "WPS 写文章并导出 PDF"
+    type: "domain"
+    platform: "wps"
+    action: "export"
+    triggers: ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "写文章", "导出PDF", "保存PDF", "插入图片", "字体颜色", "斜体"]
+    trigger_patterns:
+      - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,30}(?:写文章|写文档|新建文档|新建文字|生成文档|导出\\s*pdf|保存\\s*pdf|导出)"
+      - "(?:写文章|写文档|新建文档|新建文字|生成文档|导出\\s*pdf|保存\\s*pdf).{0,30}(?:wps|金山办公|金山文档|金山文字|wps客户端)"
+      - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,50}(?:写|创建|新建|生成).{0,50}(?:docx|word|文章|文档|文字)"
+      - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,80}(?:pdf|导出|保存|路径)"
+    url_patterns: []
+    description: "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题和正文，设置标题、字体、段落和编号样式，保存 docx 并导出 PDF"
+    version: "1.0.0"
+    examples:
+      - "WPS写文章，标题是“测试标题”，内容是“测试正文”，最后导出PDF"
+      - "用金山文档新建文字，标题是“周报”，正文是“第一段内容”，保存PDF"
+      - "在WPS客户端生成文档，标题是“知乎文章”，内容是“正文内容”"
+    params:
+      title:
+        type: title
+        required: false
+        description: "文档标题"
+      body:
+        type: body
+        required: true
+        description: "正文内容"
+      output_dir:
+        type: string
+        required: false
+        description: "保存目录"
+        extract_patterns:
+          - '(?:输出目录|保存目录|导出目录|output_dir)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:[\\/][^"”\n]+)'
+      docx_path:
+        type: string
+        required: false
+        description: "docx 保存路径"
+        extract_patterns:
+          - '(?:docx路径|文档路径|保存路径|docx_path)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.docx)'
+      pdf_path:
+        type: string
+        required: false
+        description: "PDF 导出路径"
+        extract_patterns:
+          - '(?:PDF路径|pdf路径|导出路径|保存路径|路径|pdf_path)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.pdf)'
+          - '(?:导出为|保存为)\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.pdf)'
+      file_name:
+        type: string
+        required: false
+        description: "文档文件名，不含路径时用于生成 docx/pdf 文件名"
+        extract_patterns:
+          - '(?:文件名|文件名称|filename|file_name)\s*(?:是|为|:|：)?\s*["“]?([^"”，,。;；\n]+)'
+      font_name:
+        type: string
+        required: false
+        description: "正文和标题使用的字体名称"
+        extract_patterns:
+          - '(宋体|黑体|楷体(?:_GB2312)?|仿宋|微软雅黑|Microsoft YaHei|Arial|Times New Roman|SimSun)\s*\d*\s*号?'
+          - '(?:字体|font)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z\u4e00-\u9fff ]+?)(?=\s*\d+\s*号|\s*字号|[,，。]|$)'
+          - '([A-Za-z\u4e00-\u9fff ]+?)\s*\d+\s*号'
+      font_size:
+        type: string
+        required: false
+        description: "正文字号"
+        extract_patterns:
+          - '(?:字号|字体大小|font_size)\s*(?:是|为|:|：)?\s*(\d{1,2})'
+          - '(?:字体|font).{0,20}?(\d{1,2})\s*号?'
+      font_color:
+        type: string
+        required: false
+        description: "正文和标题使用的字体颜色"
+        extract_patterns:
+          - '(?:字体颜色|颜色|font_color)\s*(?:是|为|:|：)?\s*(红色|蓝色|绿色|黑色|白色|黄色|灰色|red|blue|green|black|white|yellow|gray|grey)'
+          - '(?:字体|font).{0,12}?(红色|蓝色|绿色|黑色|白色|黄色|灰色|red|blue|green|black|white|yellow|gray|grey)'
+      italic:
+        type: string
+        required: false
+        description: "是否使用斜体"
+        extract_patterns:
+          - '(斜体|italic)'
+      image_path:
+        type: image_path
+        required: false
+        description: "需要插入到文档末尾的本地图片路径"
+        extract_patterns:
+          - '(?:插入图片|图片地址|图片路径|图片|image_path|image)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.(?:jpg|jpeg|png|webp|bmp|gif))'
+
+  # ──────────────────────────────────────────────
   # GitHub
   # ──────────────────────────────────────────────
 
@@ -831,6 +922,10 @@ sources:
 
   - id: "domain/google_search"
     file: "search/google_search.py"
+    entry: "run"
+
+  - id: "domain/wps_writer_export"
+    file: "export/wps_writer_export.py"
     entry: "run"
 
   - id: "domain/bing_search"

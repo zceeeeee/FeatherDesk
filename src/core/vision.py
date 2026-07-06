@@ -33,12 +33,23 @@ class PageAnalysis:
     raw_response: str = ""
 
 
+OPENAI_COMPATIBLE_PROVIDERS = {"openai", "mimo", "deepseek", "openai-compatible"}
+
+
 class VisionModule:
     """Analyze screenshots with a configured multimodal LLM provider."""
 
-    def __init__(self, provider: str | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        provider: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+    ) -> None:
         self._provider = provider or self._detect_provider()
         self._api_key = api_key or self._get_api_key()
+        self._base_url = base_url or self._get_base_url()
+        self._model = model or self._get_model()
 
     def analyze_page(self, question: str | None = None) -> PageAnalysis:
         page = get_browser_manager().get_page()
@@ -59,18 +70,26 @@ class VisionModule:
         return None
 
     def _detect_provider(self) -> str:
+        provider = os.getenv("VISION_PROVIDER") or os.getenv("LLM_PROVIDER")
+        if provider:
+            return provider.strip().lower()
+        if os.getenv("VISION_API_KEY"):
+            return "openai"
         if os.getenv("ANTHROPIC_API_KEY"):
             return "anthropic"
         if os.getenv("OPENAI_API_KEY"):
             return "openai"
         raise ValueError(
-            "未找到 API Key。请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 环境变量。"
+            "未找到 API Key。请设置 VISION_API_KEY、ANTHROPIC_API_KEY 或 OPENAI_API_KEY 环境变量。"
         )
 
     def _get_api_key(self) -> str:
+        key = os.getenv("VISION_API_KEY", "")
+        if key:
+            return key
         if self._provider == "anthropic":
             key = os.getenv("ANTHROPIC_API_KEY", "")
-        elif self._provider == "openai":
+        elif self._provider in OPENAI_COMPATIBLE_PROVIDERS:
             key = os.getenv("OPENAI_API_KEY", "")
         else:
             key = ""
@@ -80,6 +99,32 @@ class VisionModule:
                 f"未找到 {self._provider.upper()}_API_KEY 环境变量。"
             )
         return key
+
+    def _get_base_url(self) -> str:
+        configured = os.getenv("VISION_BASE_URL", "").strip()
+        if configured:
+            return configured.rstrip("/")
+        if self._provider == "anthropic":
+            return os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip(
+                "/"
+            )
+        return os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+
+    def _get_model(self) -> str:
+        configured = os.getenv("VISION_MODEL", "").strip()
+        if configured:
+            return configured
+        if self._provider == "anthropic":
+            return (
+                os.getenv("ANTHROPIC_VISION_MODEL", "").strip()
+                or os.getenv("ANTHROPIC_MODEL", "").strip()
+                or "claude-sonnet-4-20250514"
+            )
+        return (
+            os.getenv("OPENAI_VISION_MODEL", "").strip()
+            or os.getenv("OPENAI_MODEL", "").strip()
+            or "gpt-4o"
+        )
 
     def _build_prompt(self, question: str | None) -> str:
         prompt = """你是一个网页分析专家。请分析这张网页截图，并返回以下信息：
@@ -111,7 +156,7 @@ class VisionModule:
     def _call_llm(self, prompt: str, b64_image: str) -> str:
         if self._provider == "anthropic":
             return self._call_anthropic(prompt, b64_image)
-        if self._provider == "openai":
+        if self._provider in OPENAI_COMPATIBLE_PROVIDERS:
             return self._call_openai(prompt, b64_image)
         raise ValueError(f"不支持的 LLM 提供商: {self._provider}")
 
@@ -119,14 +164,14 @@ class VisionModule:
         import httpx
 
         response = httpx.post(
-            "https://api.anthropic.com/v1/messages",
+            f"{self._base_url.rstrip('/')}/v1/messages",
             headers={
                 "x-api-key": self._api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-20250514",
+                "model": self._model,
                 "max_tokens": 4096,
                 "messages": [
                     {
@@ -154,13 +199,13 @@ class VisionModule:
         import httpx
 
         response = httpx.post(
-            "https://api.openai.com/v1/chat/completions",
+            f"{self._base_url.rstrip('/')}/chat/completions",
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": "gpt-4o",
+                "model": self._model,
                 "max_tokens": 4096,
                 "messages": [
                     {
@@ -217,11 +262,18 @@ _instance: VisionModule | None = None
 def get_vision_module(
     provider: str | None = None,
     api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
 ) -> VisionModule:
     """Return the process-wide VisionModule instance."""
     global _instance
     if _instance is None:
-        _instance = VisionModule(provider=provider, api_key=api_key)
+        _instance = VisionModule(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        )
     return _instance
 
 

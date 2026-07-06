@@ -709,6 +709,39 @@ def load_cookies(domain: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def wps_writer_export(
+    title: str,
+    body: str,
+    output_dir: str | None = None,
+    docx_path: str | None = None,
+    pdf_path: str | None = None,
+    file_name: str | None = None,
+    font_name: str | None = None,
+    font_size: int | str | None = None,
+    font_color: int | str | None = None,
+    italic: bool | str | None = None,
+    image_path: str | None = None,
+    keep_open: bool = True,
+) -> dict:
+    """Create a WPS Writer/Word document and export it as PDF."""
+    from src.layer_1.wps_writer import export_article_to_pdf
+
+    return export_article_to_pdf(
+        title=title,
+        body=body,
+        output_dir=output_dir,
+        docx_path=docx_path,
+        pdf_path=pdf_path,
+        file_name=file_name,
+        font_name=font_name,
+        font_size=font_size,
+        font_color=font_color,
+        italic=italic,
+        image_path=image_path,
+        keep_open=keep_open,
+    )
+
+
 def get_controls_exports() -> Dict[str, Any]:
     """返回控件层所有可导出的函数。
 
@@ -743,6 +776,7 @@ def get_controls_exports() -> Dict[str, Any]:
         "type_text": type_text,
         "press_key": press_key,
         "upload_file": upload_file,
+        "wps_writer_export": wps_writer_export,
         # Cookie 持久化
         "save_cookies": save_cookies,
         "load_cookies": load_cookies,

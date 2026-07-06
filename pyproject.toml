@@ -41,6 +41,7 @@ dependencies = [
     "httpx>=0.24.0",
     "click>=8.0.0",
     "flask>=3.0.0",
+    "pywin32>=306; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
