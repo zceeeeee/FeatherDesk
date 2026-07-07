@@ -239,7 +239,12 @@ class LLMClient:
             )
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            result = message.get("content") or ""
+            # Some models (e.g. MiMo) put the response in reasoning_content
+            if not result.strip():
+                result = message.get("reasoning_content") or ""
+            return result
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
                 f"OpenAI API error {exc.response.status_code}: {exc.response.text[:200]}"
