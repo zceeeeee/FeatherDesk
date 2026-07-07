@@ -227,6 +227,10 @@ class LLMClient:
             "max_tokens": max_tokens,
             "messages": messages,
         }
+        # Disable reasoning/thinking mode for models that support it
+        # (e.g. MiMo, QwQ). Standard OpenAI API ignores this parameter.
+        if os.getenv("LLM_DISABLE_THINKING", "true").lower() in ("true", "1", "yes"):
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
