@@ -1354,15 +1354,24 @@ class AgentLoop:
             page_url = get_browser_manager().get_page().url
         except Exception:
             page_url = ""
-        # Skip if on blank page with search engine script
+        if not page_url:
+            return False
+        lowered_script = script.lower()
+        has_search_engine_script = any(
+            engine in lowered_script for engine in _GENERIC_SEARCH_ENGINES
+        )
+        if not has_search_engine_script:
+            return False
+        # Skip if on blank page
         if self._is_blank_page(page_url):
-            lowered_script = script.lower()
-            return any(engine in lowered_script for engine in _GENERIC_SEARCH_ENGINES)
-        # Skip if on a search results page (failed entry resolution)
-        # and the script would navigate to another search engine
+            return True
+        # Skip if on a search results page
         if any(engine in page_url.lower() for engine in ("bing.com/search", "google.com/search", "baidu.com/s")):
-            lowered_script = script.lower()
-            return any(engine in lowered_script for engine in _GENERIC_SEARCH_ENGINES)
+            return True
+        # Skip if we successfully navigated to a non-search-engine site
+        # (the script should use Explore mode on that site, not redirect to baidu)
+        if not any(engine in page_url.lower() for engine in _GENERIC_SEARCH_ENGINES):
+            return True
         return False
 
     def _find_explore_experience(
