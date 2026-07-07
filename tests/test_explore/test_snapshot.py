@@ -18,12 +18,16 @@ class FakeLocator:
     def evaluate(self, _script, ref=None):
         self.page.synced_refs[self.selector] = ref
 
+    def aria_snapshot(self, mode=None, boxes=None):
+        return self.page._native_yaml
+
 
 class FakePage:
     url = "https://example.com/search"
 
     def __init__(self):
         self.synced_refs = {}
+        self._native_yaml = ""
 
     def title(self):
         return "Example"
@@ -64,6 +68,9 @@ class FakePage:
 
     def locator(self, selector):
         return FakeLocator(self, selector)
+
+    def get_by_role(self, role, name=None):
+        return FakeLocator(self, f'[role="{role}"]')
 
 
 def _refs(nodes):
@@ -110,3 +117,160 @@ def test_dom_explorer_aria_summary_returns_dict():
 
     assert summary["version"] == "snapshot_v1"
     assert summary["interactive_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests for Playwright native aria_snapshot integration
+# ---------------------------------------------------------------------------
+
+
+class TestNativeAriaSnapshot:
+    """Test Playwright native aria_snapshot integration."""
+
+    def test_parse_simple_yaml(self):
+        """Parse simple YAML snapshot."""
+        yaml_text = """
+- button "Submit" [ref=e1]
+- textbox "Email" [ref=e2]
+"""
+        result = SnapshotGenerator._parse_aria_yaml(yaml_text)
+        assert result["role"] == "generic"  # root
+        assert len(result["children"]) == 2
+        assert result["children"][0]["role"] == "button"
+        assert result["children"][0]["name"] == "Submit"
+        assert result["children"][0]["ref"] == "e1"
+        assert result["children"][1]["role"] == "textbox"
+        assert result["children"][1]["name"] == "Email"
+        assert result["children"][1]["ref"] == "e2"
+
+    def test_parse_nested_yaml(self):
+        """Parse nested YAML with indented children."""
+        yaml_text = """
+- navigation "Main Nav":
+  - link "Home" [ref=e1]
+  - link "About" [ref=e2]
+- main "Content":
+  - button "Click me" [ref=e3]
+"""
+        result = SnapshotGenerator._parse_aria_yaml(yaml_text)
+        assert len(result["children"]) == 2
+        nav = result["children"][0]
+        assert nav["role"] == "navigation"
+        assert nav["name"] == "Main Nav"
+        assert len(nav["children"]) == 2
+        assert nav["children"][0]["role"] == "link"
+        assert nav["children"][0]["ref"] == "e1"
+        main = result["children"][1]
+        assert main["role"] == "main"
+        assert len(main["children"]) == 1
+        assert main["children"][0]["ref"] == "e3"
+
+    def test_parse_yaml_with_attributes(self):
+        """Parse YAML with checked, level, disabled attributes."""
+        yaml_text = """
+- checkbox [checked] [ref=e1]
+- heading "Title" [level=2]
+- textbox "Name" [disabled] [ref=e2]
+"""
+        result = SnapshotGenerator._parse_aria_yaml(yaml_text)
+        assert result["children"][0]["ref"] == "e1"
+        assert result["children"][0].get("checked") is True
+        assert result["children"][1]["level"] == 2
+        assert result["children"][2]["disabled"] is True
+
+    def test_parse_yaml_with_text_node(self):
+        """Parse pure text nodes - content merges into parent name."""
+        yaml_text = """
+- paragraph:
+  - text: Hello world
+"""
+        result = SnapshotGenerator._parse_aria_yaml(yaml_text)
+        assert len(result["children"]) == 1
+        para = result["children"][0]
+        assert para["role"] == "paragraph"
+        assert "Hello world" in para["name"]
+
+    def test_parse_yaml_with_url_property(self):
+        """Parse link href property node."""
+        yaml_text = """
+- link "Home" [ref=e1]:
+  - /url: "https://example.com"
+"""
+        result = SnapshotGenerator._parse_aria_yaml(yaml_text)
+        link = result["children"][0]
+        assert link["role"] == "link"
+        assert link["ref"] == "e1"
+        # URL is stored as a special child
+        assert len(link["children"]) == 1
+        assert link["children"][0]["role"] == "__url"
+
+    def test_native_api_returns_refs(self):
+        """Native API refs map directly to AriaNode.ref."""
+        page = FakePage()
+        page._native_yaml = """
+- button "OK" [ref=e1]
+- textbox "Name" [ref=e2]
+"""
+        gen = SnapshotGenerator()
+        snapshot = gen.snapshot(page, mode=SnapshotMode.FULL)
+
+        assert snapshot.interactive_count == 2
+        refs = _refs(snapshot.nodes)
+        assert "e1" in refs
+        assert "e2" in refs
+
+    def test_fallback_to_custom_js(self):
+        """When aria_snapshot raises AttributeError, fall back to custom JS."""
+        page = FakePage()
+        # Make aria_snapshot raise AttributeError
+        original_locator = page.locator
+
+        def broken_locator(selector):
+            loc = original_locator(selector)
+            loc.aria_snapshot = lambda **kwargs: (_ for _ in ()).throw(
+                AttributeError("aria_snapshot not available")
+            )
+            return loc
+
+        page.locator = broken_locator
+        gen = SnapshotGenerator()
+        snapshot = gen.snapshot(page, mode=SnapshotMode.COMPACT)
+
+        # Should still get results via fallback JS
+        assert snapshot.version == "snapshot_v1"
+        assert snapshot.interactive_count == 2
+
+    def test_compact_mode_with_native_refs(self):
+        """Compact mode filters correctly when native refs are present."""
+        page = FakePage()
+        page._native_yaml = """
+- heading "Welcome" [ref=e0]
+- button "Submit" [ref=e1]
+- textbox "Email" [ref=e2]
+- paragraph "Footer text"
+"""
+        gen = SnapshotGenerator()
+        snapshot = gen.snapshot(page, mode=SnapshotMode.COMPACT)
+
+        # heading and paragraph should be filtered out in compact mode
+        refs = _refs(snapshot.nodes)
+        assert "e1" in refs
+        assert "e2" in refs
+        assert "e0" not in refs  # heading filtered
+
+    def test_fallback_ref_generator_used_when_no_native_refs(self):
+        """RefGenerator assigns refs when native API produces no refs."""
+        page = FakePage()
+        # Native YAML without any ref attributes
+        page._native_yaml = """
+- button "Submit"
+- textbox "Email"
+"""
+        gen = SnapshotGenerator()
+        snapshot = gen.snapshot(page, mode=SnapshotMode.FULL)
+
+        # RefGenerator should have assigned refs
+        refs = _refs(snapshot.nodes)
+        assert len(refs) == 2
+        assert refs[0] == "e1"
+        assert refs[1] == "e2"

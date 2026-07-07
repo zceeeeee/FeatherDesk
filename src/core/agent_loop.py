@@ -70,6 +70,11 @@ from src.skill_library.registry import SkillRegistry, get_skill_registry
 logger = get_logger(__name__)
 
 
+_GENERIC_SEARCH_ENGINES: tuple[str, ...] = (
+    "baidu.com", "google.com", "bing.com",
+    "sogou.com", "360.cn", "yandex.com", "duckduckgo.com",
+)
+
 _EXPLORE_ENTRYPOINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "gmail",
@@ -127,6 +132,7 @@ class _LLMCallerAdapter:
 
     def __init__(self, parser: LLMIntentParser) -> None:
         self._parser = parser
+        self._client = parser._client  # expose underlying LLMClient
 
     def call(self, prompt: str) -> str:
         return self._parser._client.chat(prompt)
@@ -136,12 +142,16 @@ class _LLMCallerAdapter:
         prompt: str,
         schema: dict[str, Any] | None = None,
         system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         return chat_json_with_retry(
             self._parser._client,
             prompt,
             system_prompt=system_prompt or "根据用户输入，返回结构化 JSON 结果。",
             schema=schema,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
 
@@ -730,6 +740,14 @@ class AgentLoop:
         mentions: list[tuple[int, str]] = []
         action_pattern = "|".join(re.escape(word) for word in _PLATFORM_ACTION_WORDS)
 
+        # If task contains search-like verbs and mentions an email service,
+        # the user likely wants to search for info, not open the email site
+        _SEARCH_VERBS = re.compile(
+            r"(?:搜索|搜|查找|查询|查|找|search|how|怎么|如何|是什么|是什么)",
+            re.IGNORECASE,
+        )
+        _EMAIL_PLATFORMS = {"gmail", "outlook"}
+
         for platform, _url, aliases in _EXPLORE_ENTRYPOINTS:
             for alias in sorted(aliases, key=len, reverse=True):
                 alias_pattern = re.escape(alias)
@@ -742,11 +760,22 @@ class AgentLoop:
                         mentions.append((match.start(), platform))
 
         if mentions:
-            return max(mentions, key=lambda item: item[0])[1]
+            best = max(mentions, key=lambda item: item[0])[1]
+            # Skip email platforms when task has search intent
+            if best in _EMAIL_PLATFORMS and _SEARCH_VERBS.search(task):
+                return None
+            return best
 
+        # Fallback: substring matching.
+        # If the task has search-like verbs, skip email/service platforms
+        # to avoid "谷歌邮箱怎么注册" → gmail/google when user wants to search.
+        _SERVICE_PLATFORMS = _EMAIL_PLATFORMS | {"google"}
+        has_search_intent = bool(_SEARCH_VERBS.search(task))
         lowered = task.lower()
         for platform, _url, aliases in _EXPLORE_ENTRYPOINTS:
             if any(alias.lower() in lowered for alias in aliases):
+                if has_search_intent and platform in _SERVICE_PLATFORMS:
+                    continue
                 return platform
         return None
 
@@ -1187,7 +1216,7 @@ class AgentLoop:
         if not self._is_blank_page(page_url):
             return False
         lowered_script = script.lower()
-        return "baidu.com" in lowered_script or "https://www.baidu.com" in lowered_script
+        return any(engine in lowered_script for engine in _GENERIC_SEARCH_ENGINES)
 
     def _find_explore_experience(
         self,
@@ -2179,7 +2208,7 @@ class AgentLoop:
         )
 
         try:
-            raw = self._llm_parser._call_llm(match_prompt)
+            raw = self._llm_parser._client.chat(match_prompt)
             chosen_id = raw.strip().strip('"').strip("'")
 
             chosen_skill = self._skill_router.get_skill(chosen_id)
@@ -2234,7 +2263,7 @@ class AgentLoop:
                     "优先调用 panel_show/panel_prompt 或 panel_set_fields 询问用户，"
                     "不要静默失败。panel_prompt 的问题可以包含 [选项] [选项] 生成快捷选择。\n"
                 )
-                script = self._llm_parser._call_llm(modify_prompt).strip()
+                script = self._llm_parser._client.chat(modify_prompt).strip()
 
                 # 去掉可能的代码块标记
                 if script.startswith("```"):

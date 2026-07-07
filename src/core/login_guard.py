@@ -26,10 +26,25 @@ class GenericLoginGuard:
         self._panel_manager_getter = panel_manager_getter
         self._enabled = enabled
         self._waiting = False
+        self._last_check_time: float = 0.0
+        self._check_interval: float = 0.5  # 500ms interval
 
     def maybe_wait(self, action_name: str) -> bool:
         if not self._enabled or self._waiting:
             return False
+        # Skip non-interactive operations
+        if action_name in {
+            "before_scroll", "after_scroll",
+            "before_wait", "after_wait",
+            "before_screenshot", "after_screenshot",
+            "before_snapshot", "after_snapshot",
+        }:
+            return False
+        # Frequency limiting
+        now = time.monotonic()
+        if now - self._last_check_time < self._check_interval:
+            return False
+        self._last_check_time = now
         prompt = self._detect_login_prompt()
         if prompt.get("login_required"):
             self._wait_for_completion(action_name)
@@ -194,15 +209,24 @@ class GenericLoginGuard:
                 """
 (() => {
   /* GENERIC_LOGIN_PROMPT_DETECTOR */
-  const LOGIN_TEXT = '\\u767b\\u5f55';
-  const LOGIN_ALT_TEXT = '\\u767b\\u9646';
+  const LOGIN_KEYWORDS = [
+    '登录', '登陆',
+    '注册',
+    '短信验证',
+    'sign in', 'log in', 'login', 'signin',
+    'sign up', 'signup', 'register',
+    'continue with', 'authorize', 'authentication',
+  ];
   const visible = (el) => {
     const style = window.getComputedStyle(el);
     return style && style.visibility !== 'hidden' && style.display !== 'none' &&
       (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   };
-  const compact = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
-  const hasLoginText = (text) => text.includes(LOGIN_TEXT) || text.includes(LOGIN_ALT_TEXT);
+  const compact = (el) => (el.innerText || el.textContent || '').trim().replace(/\s+/g, '');
+  const hasLoginText = (text) => {
+    const lower = text.toLowerCase();
+    return LOGIN_KEYWORDS.some(kw => lower.includes(kw));
+  };
   const modalLike = (el) => {
     if (!visible(el)) return false;
     const rect = el.getBoundingClientRect();
@@ -216,7 +240,7 @@ class GenericLoginGuard:
     const onScreen = rect.bottom > 0 && rect.right > 0 &&
       rect.left < window.innerWidth && rect.top < window.innerHeight;
     const fixedLayer = ['fixed', 'absolute', 'sticky'].includes(style.position) || z >= 10;
-    const modalClass = /(modal|popup|dialog|overlay|mask|passport|login|auth|sign)/i.test(className);
+    const modalClass = /(modal|popup|dialog|overlay|mask|passport|login|auth|sign|signin|register|oauth|sso|credential)/i.test(className);
     const pageChrome = tag === 'header' || tag === 'nav' ||
       /(header|navbar|nav-|topbar|toolbar|menu|sidebar|footer)/i.test(className);
     const centerX = rect.left + rect.width / 2;
@@ -234,10 +258,24 @@ class GenericLoginGuard:
       (largeEnough && fixedLayer && centered)
     );
   };
-  const loginNodes = Array.from(document.querySelectorAll(
-    'button,[role="button"],a,div,section,article,form,span,p'
-  )).filter(visible).map((el) => ({el, text: compact(el)}))
+  // Phase 1: high-hit selectors (fast)
+  const quickSelectors = [
+    'button', '[role="button"]', 'a[href]',
+    'input[type="submit"]', 'input[type="button"]',
+    '[class*="login" i]', '[class*="sign" i]', '[class*="auth" i]',
+    '[class*="register" i]', '[id*="login" i]', '[id*="sign" i]',
+  ];
+  let loginNodes = Array.from(document.querySelectorAll(quickSelectors.join(',')))
+    .filter(visible).map((el) => ({el, text: compact(el)}))
     .filter((item) => hasLoginText(item.text) && item.text.length <= 1200);
+
+  // Phase 2: full scan fallback if phase 1 found nothing
+  if (loginNodes.length === 0) {
+    loginNodes = Array.from(document.querySelectorAll(
+      'button,[role="button"],a,div,section,article,form,span,p'
+    )).filter(visible).map((el) => ({el, text: compact(el)}))
+      .filter((item) => hasLoginText(item.text) && item.text.length <= 1200);
+  }
   for (const item of loginNodes) {
     let node = item.el;
     for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {

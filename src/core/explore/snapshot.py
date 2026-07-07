@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .models import AriaNode, FocusTarget, SnapshotMode, SnapshotResponse
 from .ref_generator import RefGenerator
 
 
-_ARIA_EXTRACTION_JS = r"""
+_ARIA_EXTRACTION_JS_FALLBACK = r"""
 (options) => {
   const maxElements = Math.max(1, Number(options?.maxElements || 50));
   const truncate = (value, limit = 80) => {
@@ -53,6 +54,8 @@ _ARIA_EXTRACTION_JS = r"""
     return parts.join(' > ');
   };
   const implicitRole = (el) => {
+    const explicit = el.getAttribute('role');
+    if (explicit) return explicit;
     const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute('type') || '').toLowerCase();
     if (tag === 'a' && el.hasAttribute('href')) return 'link';
@@ -74,9 +77,13 @@ _ARIA_EXTRACTION_JS = r"""
     if (tag === 'footer') return 'contentinfo';
     if (tag === 'article') return 'article';
     if (tag === 'section') return 'region';
+    const cls = (el.className || '').toString().toLowerCase();
+    if (/\bbtn\b/.test(cls) || /\bbutton\b/.test(cls)) return 'button';
+    if (/\binput\b/.test(cls) && tag === 'div') return 'textbox';
     return 'generic';
   };
   const isVisible = (el) => {
+    if (el.nodeType !== Node.ELEMENT_NODE) return false;
     const style = window.getComputedStyle(el);
     if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
     if (Number(style.opacity) === 0) return false;
@@ -95,15 +102,27 @@ _ARIA_EXTRACTION_JS = r"""
         .join(' ');
       if (labelled.trim()) return truncate(labelled);
     }
-    return truncate(
-      el.getAttribute('aria-label') ||
-      el.getAttribute('title') ||
-      el.getAttribute('alt') ||
-      el.getAttribute('placeholder') ||
-      el.innerText ||
-      el.textContent ||
-      ''
-    );
+    const ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel) return truncate(ariaLabel);
+    const title = el.getAttribute('title');
+    if (title) return truncate(title);
+    const alt = el.getAttribute('alt');
+    if (alt) return truncate(alt);
+    if (el.id) {
+      const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (label) return truncate(label.innerText || label.textContent || '');
+    }
+    const parentLabel = el.closest('label');
+    if (parentLabel) return truncate(parentLabel.innerText || parentLabel.textContent || '');
+    const placeholder = el.getAttribute('placeholder');
+    if (placeholder) return truncate(placeholder);
+    if (el.tagName === 'INPUT') {
+      const value = el.getAttribute('value');
+      if (value) return truncate(value);
+    }
+    const svgTitle = el.querySelector('title');
+    if (svgTitle) return truncate(svgTitle.textContent || '');
+    return truncate(el.innerText || el.textContent || '');
   };
   const focus = options?.focus || null;
   let root = document.body;
@@ -144,6 +163,15 @@ _ARIA_EXTRACTION_JS = r"""
       children: []
     };
     const nextContext = name || context;
+
+    // Shadow DOM penetration
+    if (el.shadowRoot) {
+      for (const child of Array.from(el.shadowRoot.children)) {
+        const childNode = walk(child, depth + 1, nextContext);
+        if (childNode) node.children.push(childNode);
+      }
+    }
+
     for (const child of Array.from(el.children || [])) {
       const childNode = walk(child, depth + 1, nextContext);
       if (childNode) node.children.push(childNode);
@@ -175,8 +203,9 @@ class SnapshotGenerator:
 
     def __init__(self, config: Any = None) -> None:
         self._config = config
-        self._ref_gen = RefGenerator()
+        self._ref_gen = RefGenerator()  # kept for fallback
         self._version_counter = 0
+        self._use_native = True  # prefer native aria_snapshot API
 
     def snapshot(
         self,
@@ -186,11 +215,15 @@ class SnapshotGenerator:
     ) -> SnapshotResponse:
         self._version_counter += 1
         version = f"snapshot_v{self._version_counter}"
-        self._ref_gen.reset()
 
         raw_tree = self._extract_aria_tree(page, focus)
         nodes = self._build_nodes(raw_tree, mode)
-        self._ref_gen.assign_refs(nodes)
+
+        # If native API didn't produce refs (fallback case), use RefGenerator
+        if not self._has_any_ref(nodes):
+            self._ref_gen.reset()
+            self._ref_gen.assign_refs(nodes)
+
         self._sync_refs_to_dom(page, nodes)
         interactive_count = self._count_interactive(nodes)
         state = self._detect_page_state(page)
@@ -206,17 +239,209 @@ class SnapshotGenerator:
         )
 
     def _extract_aria_tree(self, page: Any, focus: FocusTarget | None = None) -> dict:
+        if self._use_native:
+            try:
+                result = self._extract_via_native(page, focus)
+                if result:
+                    return result
+                # Empty result from native API — try fallback
+            except (AttributeError, TypeError, Exception) as exc:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "aria_snapshot() failed, falling back: %s", exc
+                )
+        return self._extract_via_custom_js(page, focus)
+
+    def _extract_via_native(self, page: Any, focus: FocusTarget | None = None) -> dict:
+        """Use Playwright native aria_snapshot to extract semantic tree."""
+        locator = page.locator("body")
+
+        # Handle focus targeting
+        if focus:
+            if focus.type == "ref":
+                locator = page.locator(f'[data-explore-ref="{focus.value}"]')
+            elif focus.type == "role_name":
+                role, name = focus.value.split(":", 1)
+                locator = page.get_by_role(role, name=name)
+
+        yaml_text = locator.aria_snapshot(mode="ai", boxes=True)
+        tree = self._parse_aria_yaml(yaml_text)
+        # If native API returned no children, signal empty so fallback can try
+        if not tree.get("children"):
+            return {}
+        return tree
+
+    def _extract_via_custom_js(self, page: Any, focus: FocusTarget | None = None) -> dict:
+        """Fallback: use custom JS for ARIA extraction."""
         options = {
             "maxElements": getattr(self._config, "snapshot_max_elements", 50),
             "focus": focus.model_dump() if focus else None,
         }
         try:
-            raw = page.evaluate(_ARIA_EXTRACTION_JS, options)
+            raw = page.evaluate(_ARIA_EXTRACTION_JS_FALLBACK, options)
         except TypeError:
-            raw = page.evaluate(_ARIA_EXTRACTION_JS)
+            raw = page.evaluate(_ARIA_EXTRACTION_JS_FALLBACK)
         except Exception:
             raw = {}
         return raw if isinstance(raw, dict) else {}
+
+    # ------------------------------------------------------------------
+    # YAML parser for Playwright native aria_snapshot output
+    # ------------------------------------------------------------------
+
+    # Regex patterns for YAML line parsing
+    _YAML_LINE_RE = re.compile(
+        r"^(\s*)- "  # indentation + list marker
+        r"(?:(\w[\w\s]*?)(?:\s+\"([^\"]*)\")?(?:\s+\[([^\]]*)\])?\s*(:?\s*$))"  # role "name" [attrs]
+        r"|"
+        r"^(\s*)- (text):\s*(.*)"  # - text: content
+        r"|"
+        r"^(\s*)- (/(\w+)):\s*(.*)"  # - /url: value
+    )
+
+    _YAML_NODE_RE = re.compile(
+        r"^(\s*)- "
+        r"(\w[\w\s]*?)"  # role
+        r"(?:\s+\"([^\"]*)\")?"  # optional quoted name
+        r"(\s+\[[^\]]*\])*"  # zero or more [attr] blocks
+        r"\s*:?\s*$"
+    )
+
+    _YAML_TEXT_RE = re.compile(r"^(\s*)- text:\s*(.*)")
+    _YAML_PROP_RE = re.compile(r"^(\s*)- /(\w+):\s*(.*)")
+
+    @classmethod
+    def _parse_aria_yaml(cls, yaml_text: str) -> dict:
+        """Parse Playwright aria_snapshot YAML into an AriaNode-compatible dict tree."""
+        lines = yaml_text.strip().split("\n")
+        if not lines:
+            return {"role": "generic", "name": "", "children": []}
+
+        # Root node
+        root: dict[str, Any] = {
+            "role": "generic",
+            "name": "",
+            "tag": None,
+            "selector": None,
+            "placeholder": None,
+            "disabled": False,
+            "level": None,
+            "context": "",
+            "children": [],
+        }
+
+        # Stack of (indent_level, node_dict)
+        stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+
+        for line in lines:
+            if not line.strip():
+                continue
+
+            # Calculate indent level (2 spaces per level)
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+
+            # Try text node: - text: content
+            text_match = cls._YAML_TEXT_RE.match(line)
+            if text_match:
+                text_content = text_match.group(2).strip()
+                # Find parent based on indent
+                while len(stack) > 1 and stack[-1][0] >= indent:
+                    stack.pop()
+                if stack:
+                    parent = stack[-1][1]
+                    # Append text to parent's name
+                    existing = parent.get("name", "")
+                    if existing:
+                        parent["name"] = f"{existing} {text_content}"
+                    else:
+                        parent["name"] = text_content
+                continue
+
+            # Try property node: - /url: value
+            prop_match = cls._YAML_PROP_RE.match(line)
+            if prop_match:
+                prop_name = prop_match.group(2)
+                prop_value = prop_match.group(3).strip().strip('"')
+                while len(stack) > 1 and stack[-1][0] >= indent:
+                    stack.pop()
+                if stack:
+                    parent = stack[-1][1]
+                    # Store as a child dict with special role
+                    parent["children"].append({
+                        "role": f"__{prop_name}",
+                        "name": prop_value,
+                        "tag": None,
+                        "selector": None,
+                        "placeholder": None,
+                        "disabled": False,
+                        "level": None,
+                        "context": "",
+                        "children": [],
+                    })
+                continue
+
+            # Try regular node: - role "name" [attrs]
+            node_match = cls._YAML_NODE_RE.match(line)
+            if node_match:
+                role = node_match.group(2).strip() if node_match.group(2) else "generic"
+                name = node_match.group(3) or ""
+
+                # Parse attributes from [bracketed] blocks in the line
+                attrs = cls._parse_attrs_from_line(line)
+                ref = attrs.get("ref")
+                disabled = bool(attrs.get("disabled"))
+                level = None
+                if "level" in attrs:
+                    try:
+                        level = int(attrs["level"])
+                    except (ValueError, TypeError):
+                        pass
+                checked = bool(attrs.get("checked"))
+
+                node: dict[str, Any] = {
+                    "role": role,
+                    "name": name,
+                    "ref": ref,
+                    "tag": None,
+                    "selector": None,
+                    "placeholder": None,
+                    "disabled": disabled,
+                    "level": level,
+                    "context": "",
+                    "children": [],
+                }
+                if checked:
+                    node["checked"] = True
+
+                # Pop stack until we find the parent (indent less than current)
+                while len(stack) > 1 and stack[-1][0] >= indent:
+                    stack.pop()
+
+                # Add as child of current top of stack
+                stack[-1][1]["children"].append(node)
+                stack.append((indent, node))
+                continue
+
+        return root
+
+    @staticmethod
+    def _parse_attrs_from_line(line: str) -> dict[str, Any]:
+        """Extract attributes from all [attr] blocks in a YAML line."""
+        attrs: dict[str, Any] = {}
+        for match in re.finditer(r"\[([^\]]+)\]", line):
+            attr = match.group(1).strip()
+            if "=" in attr:
+                key, val = attr.split("=", 1)
+                attrs[key.strip()] = val.strip()
+            else:
+                attrs[attr] = True
+        return attrs
+
+    # ------------------------------------------------------------------
+    # Tree building
+    # ------------------------------------------------------------------
 
     def _build_nodes(self, raw_tree: dict, mode: SnapshotMode) -> list[AriaNode]:
         if not raw_tree:
@@ -239,6 +464,7 @@ class SnapshotGenerator:
         return AriaNode(
             role=str(raw.get("role") or "generic"),
             name=str(raw.get("name") or ""),
+            ref=raw.get("ref"),
             tag=raw.get("tag"),
             selector=raw.get("selector"),
             placeholder=raw.get("placeholder"),
@@ -247,6 +473,15 @@ class SnapshotGenerator:
             context=raw.get("context"),
             children=children,
         )
+
+    def _has_any_ref(self, nodes: list[AriaNode]) -> bool:
+        """Check if any node in the tree has a ref assigned."""
+        for node in nodes:
+            if node.ref:
+                return True
+            if self._has_any_ref(node.children):
+                return True
+        return False
 
     def _filter_compact(self, nodes: list[AriaNode]) -> list[AriaNode]:
         result = []
@@ -257,6 +492,7 @@ class SnapshotGenerator:
                     AriaNode(
                         role=node.role,
                         name=node.name,
+                        ref=node.ref,
                         tag=node.tag,
                         selector=node.selector,
                         placeholder=node.placeholder,

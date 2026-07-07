@@ -58,6 +58,9 @@ class FakePage:
         self.fail_refs = set()
         self.mouse = FakeMouse(self.calls)
 
+    def evaluate(self, code):
+        return None
+
     def locator(self, selector):
         ref = selector.split('"')[1]
         return FakeLocator(self, ref)
@@ -327,3 +330,99 @@ def test_panel_prompt_is_terminator_and_skips_following_actions():
         "prompt",
     ]
     assert page.calls == []
+
+
+
+def test_english_login_detection():
+    """English login popup (e.g. GitHub 'Sign in') should be detected."""
+
+    class FakeContext:
+        def __init__(self):
+            self.logged_in = False
+
+        def storage_state(self):
+            if not self.logged_in:
+                return {"cookies": [], "origins": []}
+            return {
+                "cookies": [
+                    {
+                        "name": "session",
+                        "value": "abc123",
+                        "domain": "github.com",
+                    }
+                ],
+                "origins": [],
+            }
+
+    class EnglishLoginPage(FakePage):
+        def __init__(self, context):
+            super().__init__()
+            self.context = context
+            self.url = "https://github.com"
+            self.login_required = True
+
+        def evaluate(self, code):
+            if "GENERIC_LOGIN_PROMPT_DETECTOR" in code:
+                return {
+                    "success": True,
+                    "login_required": self.login_required,
+                    "url": self.url,
+                    "text": "Sign in",
+                }
+            return None
+
+        def wait_for_timeout(self, timeout):
+            super().wait_for_timeout(timeout)
+            self.login_required = False
+            self.context.logged_in = True
+
+    class FakeBrowserManager:
+        def __init__(self):
+            self._context = FakeContext()
+            self.page = EnglishLoginPage(self._context)
+            self.current_domain = None
+            self.saved_domains = []
+
+        def save_auth(self, domain=None):
+            self.saved_domains.append(domain)
+            return True
+
+    bm = FakeBrowserManager()
+    executor = ExploreExecutor(bm.page, browser_manager=bm)
+    executor.update_snapshot(_snapshot())
+
+    result = executor.execute(
+        ActionBatch(actions=[
+            Action(action="fill", ref="e2", value="test"),
+        ])
+    )
+    assert result.success is True
+    assert result.status == "login_completed"
+
+
+def test_login_check_frequency_limit():
+    """500ms interval prevents repeated login checks."""
+
+    page = FakePage()
+    check_count = 0
+    original_evaluate = page.evaluate
+
+    def counting_evaluate(code):
+        nonlocal check_count
+        if "GENERIC_LOGIN_PROMPT_DETECTOR" in code:
+            check_count += 1
+        return original_evaluate(code)
+
+    page.evaluate = counting_evaluate
+    executor = ExploreExecutor(page)
+    executor.update_snapshot(_snapshot())
+
+    # Execute 3 actions quickly
+    executor.execute(ActionBatch(actions=[
+        Action(action="fill", ref="e2", value="a"),
+        Action(action="fill", ref="e2", value="b"),
+        Action(action="fill", ref="e2", value="c"),
+    ]))
+
+    # Should be 1-2 checks, not 6 (3 actions * 2 before/after)
+    assert check_count <= 2
