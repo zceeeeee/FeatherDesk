@@ -240,11 +240,25 @@ class LLMClient:
             response.raise_for_status()
             data = response.json()
             message = data["choices"][0]["message"]
-            result = message.get("content") or ""
-            # Some models (e.g. MiMo) put the response in reasoning_content
-            if not result.strip():
-                result = message.get("reasoning_content") or ""
-            return result
+            content_text = message.get("content") or ""
+            reasoning_text = message.get("reasoning_content") or ""
+            # MiMo reasoning model may swap content/reasoning_content.
+            # Try to return the field that contains the actual answer.
+            for candidate in (content_text, reasoning_text):
+                stripped = candidate.strip()
+                if not stripped:
+                    continue
+                # Quick check: if it starts with { or [, it's likely JSON
+                if stripped[0] in ('{', '['):
+                    return candidate
+                # Check if it contains a JSON object
+                if '{"' in stripped or '["' in stripped:
+                    return candidate
+                # Plain text answer (not chain-of-thought reasoning)
+                if len(stripped) < 500 and not stripped.startswith(('首先', 'First', 'Let me', '我需要', '用户', 'The user')):
+                    return candidate
+            # Fallback: return content, then reasoning
+            return content_text or reasoning_text
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
                 f"OpenAI API error {exc.response.status_code}: {exc.response.text[:200]}"
