@@ -227,11 +227,6 @@ class LLMClient:
             "max_tokens": max_tokens,
             "messages": messages,
         }
-        # Disable reasoning/thinking mode for models that support it
-        # (e.g. MiMo, QwQ). Standard OpenAI API ignores this parameter.
-        if os.getenv("LLM_DISABLE_THINKING", "true").lower() in ("true", "1", "yes"):
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
             "Content-Type": "application/json",
@@ -251,6 +246,51 @@ class LLMClient:
             # The caller (chat_json / chat_json_with_retry) handles
             # extracting JSON from mixed reasoning+JSON text.
             return content_text or reasoning_text
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"OpenAI API error {exc.response.status_code}: {exc.response.text[:200]}"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(f"OpenAI API call failed: {exc}") from exc
+
+    def _call_with_response_format(
+        self, prompt: str, system_prompt: str | None, temperature: float, max_tokens: int
+    ) -> str:
+        """Call with response_format=json_object for structured output."""
+        import httpx
+
+        cfg = self._config
+
+        if cfg.provider == "anthropic":
+            return self._call_anthropic(prompt, system_prompt, temperature, max_tokens)
+
+        url = f"{cfg.base_url}/chat/completions"
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": cfg.model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+        }
+
+        headers = {
+            "Authorization": f"Bearer {cfg.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            response = httpx.post(
+                url, headers=headers, json=payload, timeout=cfg.timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
                 f"OpenAI API error {exc.response.status_code}: {exc.response.text[:200]}"
