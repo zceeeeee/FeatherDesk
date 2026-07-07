@@ -255,6 +255,7 @@ class AgentLoop:
         self._current_explore_snapshot = None
         self._last_panel_answer: str | None = None
         self._explore_entry_bootstrap_attempted: set[str] = set()
+        self._just_navigated_to_entry: bool = False
 
     def run(self, task: str) -> AgentTaskResult:
         """执行一个自然语言任务。
@@ -457,6 +458,7 @@ class AgentLoop:
         self._last_explore_snapshot = None
         self._current_explore_snapshot = None
         self._explore_entry_bootstrap_attempted = set()
+        self._just_navigated_to_entry = False
 
         # 绑定任务级上下文，所有后续日志自动携带 task_id / task
         with bind_context(task_id=task_id, task=task):
@@ -649,24 +651,40 @@ class AgentLoop:
         )
 
     def _bootstrap_initial_page(self, task: str) -> str | None:
-        """Navigate away from about:blank before the first observe when possible."""
+        """Navigate away from about:blank before the first observe when possible.
+
+        Three-tier strategy:
+        1. Hardcoded entrypoints (baidu, google, github, etc.)
+        2. LLM resolves target website URL
+        3. Search via Bing + LLM picks best result
+        """
 
         bm = get_browser_manager()
         page = bm.get_page()
         if not self._is_blank_page(getattr(page, "url", "")):
             return None
 
+        # Tier 1: Hardcoded entrypoints
         target_url = self._resolve_initial_entry_url(task)
-        if not target_url and self._should_resolve_entry_with_llm(task):
+        if target_url:
+            return self._goto_initial_entry_url(target_url)
+
+        # Tier 2: LLM resolves URL
+        if self._should_resolve_entry_with_llm(task):
             self._explore_entry_bootstrap_attempted.add(task)
             target_url = self._resolve_initial_entry_url_via_llm(task)
-        if not target_url:
-            return None
+            if target_url:
+                return self._goto_initial_entry_url(target_url)
 
-        return self._goto_initial_entry_url(target_url)
+            # Tier 3: Search via Bing + LLM picks best
+            target_url = self._resolve_entry_url_via_search(task)
+            if target_url:
+                return self._goto_initial_entry_url(target_url)
+
+        return None
 
     def _bootstrap_explore_entry_page(self, task: str) -> str | None:
-        """Use LLM target-page resolution before entering Explore from a blank page."""
+        """Use three-tier resolution before entering Explore from a blank page."""
 
         if task in self._explore_entry_bootstrap_attempted:
             return None
@@ -677,14 +695,17 @@ class AgentLoop:
             return None
 
         self._explore_entry_bootstrap_attempted.add(task)
-        target_url = (
-            self._resolve_initial_entry_url(task)
-            or (
-                self._resolve_initial_entry_url_via_llm(task)
-                if self._should_resolve_entry_with_llm(task)
-                else None
-            )
-        )
+
+        # Tier 1: Hardcoded entrypoints
+        target_url = self._resolve_initial_entry_url(task)
+        if not target_url:
+            # Tier 2: LLM resolves URL
+            if self._should_resolve_entry_with_llm(task):
+                target_url = self._resolve_initial_entry_url_via_llm(task)
+            # Tier 3: Search via Bing
+            if not target_url:
+                target_url = self._resolve_entry_url_via_search(task)
+
         if not target_url:
             return None
 
@@ -702,6 +723,7 @@ class AgentLoop:
             return None
 
         logger.info("Explore bootstrap navigated to %s", target_url)
+        self._just_navigated_to_entry = True
         return target_url
 
     @staticmethod
@@ -867,6 +889,128 @@ class AgentLoop:
         if confidence < 0.55:
             return None
         return self._normalize_entry_url(data.get("url"))
+
+    def _resolve_entry_url_via_search(self, task: str) -> str | None:
+        """Tier 3: Search via Bing and let LLM pick the best matching URL.
+
+        1. Open bing.com in the current (blank) page
+        2. Search for the website mentioned in the task
+        3. Extract top search result URLs
+        4. Ask LLM to pick the one most likely to be the target site
+        """
+        if not self._llm_parser or not self._llm_parser.available:
+            return None
+
+        site_phrase = self._extract_web_target_phrase(task)
+        if not site_phrase:
+            site_phrase = task.strip()[:40]
+
+        search_query = f"{site_phrase} 官网"
+        bing_url = f"https://www.bing.com/search?q={search_query}"
+
+        page = get_browser_manager().get_page()
+        try:
+            try:
+                page.goto(bing_url, wait_until="domcontentloaded", timeout=15000)
+            except TypeError:
+                page.goto(bing_url)
+            try:
+                page.wait_for_timeout(2000)
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.warning("Bing search navigation failed: %s", exc)
+            return None
+
+        try:
+            results = page.evaluate(
+                """
+                () => {
+                    const links = Array.from(document.querySelectorAll('h2 a[href^="http"], .b_algo a[href^="http"]'));
+                    return links.slice(0, 8).map(a => ({
+                        title: (a.textContent || '').trim().slice(0, 100),
+                        url: a.href
+                    })).filter(r => r.url && r.title);
+                }
+                """
+            )
+        except Exception as exc:
+            logger.warning("Bing result extraction failed: %s", exc)
+            return None
+
+        if not results or not isinstance(results, list):
+            logger.warning("No Bing search results found")
+            return None
+
+        lines = []
+        for i, r in enumerate(results[:6]):
+            title = r.get("title", "")
+            url = r.get("url", "")
+            lines.append(f"{i+1}. {title} — {url}")
+        results_text = "\n".join(lines)
+        schema = {
+            "type": "object",
+            "properties": {
+                "best_index": {"type": "integer", "minimum": 1, "maximum": min(len(results), 6)},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "reason": {"type": "string"},
+            },
+            "required": ["best_index", "confidence", "reason"],
+        }
+        prompt = (
+            f"用户任务: {task}\n\n"
+            f"以下是 Bing 搜索 \"{search_query}\" 的结果:\n"
+            f"{results_text}\n\n"
+            "请选出最可能是用户要访问的网站。"
+            "如果搜索结果中没有合适的网站，confidence 设为 0。"
+        )
+
+        try:
+            data = chat_json_with_retry(
+                self._llm_parser._client,
+                prompt,
+                system_prompt="只返回 JSON，不要输出解释。",
+                schema=schema,
+                temperature=0,
+                max_tokens=256,
+            )
+        except Exception as exc:
+            logger.warning("LLM search result selection failed: %s", exc)
+            # Rule-based fallback: pick first non-search-engine result
+            for r in results[:6]:
+                url = r.get("url", "")
+                if url and not any(
+                    engine in url.lower()
+                    for engine in ("bing.com", "google.com", "baidu.com", "sogou.com")
+                ):
+                    logger.info("Search fallback (rule-based): %s", url)
+                    return self._normalize_entry_url(url)
+            return None
+
+        try:
+            confidence = float(data.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0
+        if confidence < 0.5:
+            # LLM not confident — try first non-search-engine result
+            for r in results[:6]:
+                url = r.get("url", "")
+                if url and not any(
+                    engine in url.lower()
+                    for engine in ("bing.com", "google.com", "baidu.com", "sogou.com")
+                ):
+                    logger.info("Search fallback (low confidence): %s", url)
+                    return self._normalize_entry_url(url)
+            return None
+
+        best_idx = int(data.get("best_index", 1)) - 1
+        if 0 <= best_idx < len(results):
+            url = results[best_idx].get("url")
+            if url:
+                logger.info("Search-based entry resolved: %s", url)
+                return self._normalize_entry_url(url)
+
+        return None
 
     @staticmethod
     def _normalize_entry_url(value: Any) -> str | None:
@@ -1035,6 +1179,16 @@ class AgentLoop:
             step.result = "plan cancelled by hook"
             logger.info("PLAN: cancelled by hook")
             return AgentState.FAILED
+
+        # ── 0. If we just navigated to target site via entry resolution,
+        #     skip skill matching and go directly to Explore mode ──
+        if self._just_navigated_to_entry:
+            self._just_navigated_to_entry = False
+            step.action = "跳转到目标站点，进入 Explore 模式"
+            step.mode = "explore"
+            step.result = "刚完成入口跳转，跳过技能匹配，直接 Explore"
+            logger.info("PLAN: just navigated to entry, skipping to Explore")
+            return AgentState.EXPLORE
 
         # ── 1. SkillRouter 严格关键词匹配 ──
         with log_timing("agent_plan_skill_router") as meta:
@@ -1213,10 +1367,25 @@ class AgentLoop:
             page_url = get_browser_manager().get_page().url
         except Exception:
             page_url = ""
-        if not self._is_blank_page(page_url):
+        if not page_url:
             return False
         lowered_script = script.lower()
-        return any(engine in lowered_script for engine in _GENERIC_SEARCH_ENGINES)
+        has_search_engine_script = any(
+            engine in lowered_script for engine in _GENERIC_SEARCH_ENGINES
+        )
+        if not has_search_engine_script:
+            return False
+        # Skip if on blank page
+        if self._is_blank_page(page_url):
+            return True
+        # Skip if on a search results page
+        if any(engine in page_url.lower() for engine in ("bing.com/search", "google.com/search", "baidu.com/s")):
+            return True
+        # Skip if we successfully navigated to a non-search-engine site
+        # (the script should use Explore mode on that site, not redirect to baidu)
+        if not any(engine in page_url.lower() for engine in _GENERIC_SEARCH_ENGINES):
+            return True
+        return False
 
     def _find_explore_experience(
         self,

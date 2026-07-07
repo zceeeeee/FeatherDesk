@@ -227,6 +227,58 @@ class LLMClient:
             "max_tokens": max_tokens,
             "messages": messages,
         }
+        headers = {
+            "Authorization": f"Bearer {cfg.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            response = httpx.post(
+                url, headers=headers, json=payload, timeout=cfg.timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            message = data["choices"][0]["message"]
+            content_text = message.get("content") or ""
+            reasoning_text = message.get("reasoning_content") or ""
+            # Prefer content. If it contains JSON, use it directly.
+            # If content is empty, try reasoning_content.
+            # The caller (chat_json / chat_json_with_retry) handles
+            # extracting JSON from mixed reasoning+JSON text.
+            return content_text or reasoning_text
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"OpenAI API error {exc.response.status_code}: {exc.response.text[:200]}"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(f"OpenAI API call failed: {exc}") from exc
+
+    def _call_with_response_format(
+        self, prompt: str, system_prompt: str | None, temperature: float, max_tokens: int
+    ) -> str:
+        """Call with response_format=json_object for structured output."""
+        import httpx
+
+        cfg = self._config
+
+        if cfg.provider == "anthropic":
+            return self._call_anthropic(prompt, system_prompt, temperature, max_tokens)
+
+        url = f"{cfg.base_url}/chat/completions"
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": cfg.model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
 
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
@@ -304,16 +356,20 @@ class LLMClient:
 
     @staticmethod
     def _parse_json(raw: str) -> Dict[str, Any]:
-        """从 LLM 回复中提取 JSON。"""
+        """从 LLM 回复中提取 JSON。
+
+        Handles responses that contain chain-of-thought reasoning mixed
+        with a JSON object (common with reasoning models like MiMo).
+        """
         text = raw.strip()
 
-        # 尝试直接解析
+        # 1. Try direct parse
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        # 尝试提取 ```json ``` 块
+        # 2. Try extracting ```json ``` block
         if "```" in text:
             start = text.find("{")
             end = text.rfind("}") + 1
@@ -323,7 +379,23 @@ class LLMClient:
                 except json.JSONDecodeError:
                     pass
 
-        # 尝试提取第一个 { ... } 块
+        # 3. Try extracting the LAST complete { ... } block
+        #    (reasoning models often put reasoning first, JSON last)
+        last_start = text.rfind("{")
+        if last_start != -1:
+            depth = 0
+            for i in range(last_start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(text[last_start : i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+        # 4. Try extracting the FIRST complete { ... } block
         start = text.find("{")
         if start != -1:
             depth = 0
@@ -331,6 +403,21 @@ class LLMClient:
                 if text[i] == "{":
                     depth += 1
                 elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(text[start : i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+        # 5. Try array format [ ... ]
+        start = text.find("[")
+        if start != -1:
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == "[":
+                    depth += 1
+                elif text[i] == "]":
                     depth -= 1
                     if depth == 0:
                         try:
