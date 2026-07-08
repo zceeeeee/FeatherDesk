@@ -10,6 +10,9 @@ import src.layer_1.wechat_client as wechat_module
 from src.core.script_engine import ScriptEngine
 from src.core.skill_router import SkillRouter
 from src.layer_1.wechat_client import (
+    CHAT_INPUT_REL,
+    SEARCH_ACCOUNTS_TAB_REL,
+    ImageMatch,
     PywinautoWechatAutomation,
     ScreenImageLocator,
     WeChatWindowManager,
@@ -147,6 +150,7 @@ class FakeImageLocator:
         self.find_matches: list[object | None] = []
         self.find_calls: list[tuple[str, object, float]] = []
         self.xy_clicks: list[tuple[int, int]] = []
+        self.relative_clicks: list[tuple[object, float, float]] = []
         self.green_matches: list[object | None] = []
         self.green_calls: list[object] = []
         self.green_text_matches: list[object | None] = []
@@ -166,6 +170,12 @@ class FakeImageLocator:
 
     def click_xy(self, x, y):
         self.xy_clicks.append((x, y))
+
+    def click_relative(self, region, rx, ry):
+        self.relative_clicks.append((region, rx, ry))
+        left, top, width, height = region
+        self.xy_clicks.append((left + int(width * rx), top + int(height * ry)))
+        return True
 
     def click_green_button(self, *, region=None, min_area=900):
         self.green_calls.append(region)
@@ -236,6 +246,25 @@ def test_wechat_screen_locator_taskbar_region_uses_bottom_screen_area():
     )
 
 
+def test_wechat_screen_locator_captures_window_region_directly():
+    class RecordingLocator(ScreenImageLocator):
+        def __init__(self) -> None:
+            super().__init__(pic_dir=".")
+            self.screenshot_regions = []
+
+        def _screenshot_array(self, region=None):
+            self.screenshot_regions.append(region)
+            return object()
+
+    locator = RecordingLocator()
+
+    capture = locator._capture_region((10, 20, 300, 400))
+
+    assert capture is not None
+    assert capture[1:] == (10, 20)
+    assert locator.screenshot_regions == [(10, 20, 300, 400)]
+
+
 def test_follow_official_account_searches_service_account_and_follows():
     fake = FakeWechatAutomation()
 
@@ -286,7 +315,7 @@ def test_wechat_clicks_first_visual_result_when_text_result_missing(monkeypatch)
 
     automation._click_service_account_result("火眼审阅")
 
-    assert image_locator.xy_clicks == [(420, 192)]
+    assert image_locator.xy_clicks == [(190, 312)]
 
 
 def test_wechat_clicks_green_account_text_before_visual_position(monkeypatch):
@@ -303,6 +332,80 @@ def test_wechat_clicks_green_account_text_before_visual_position(monkeypatch):
 
     assert image_locator.green_text_calls == [((0, 0, 1000, 800), "火眼审阅")]
     assert image_locator.xy_clicks == []
+
+
+def test_wechat_clicks_accounts_tab_by_text(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    accounts_tab = FakeUiElement("账号")
+    window = FakeUiElement("火眼审阅", [accounts_tab], process_name="WeChatAppEx.exe")
+    automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
+    automation.window = window
+
+    assert automation._click_search_accounts_tab(timeout=0.1)
+
+    assert accounts_tab.clicked is True
+
+
+def test_wechat_clicks_accounts_tab_by_window_relative_fallback(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    image_locator = FakeImageLocator()
+    window = FakeUiElement(
+        "火眼审阅",
+        process_name="WeChatAppEx.exe",
+        width=1000,
+        height=800,
+        left=50,
+        top=70,
+    )
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
+    automation.window = window
+
+    assert automation._click_search_accounts_tab(timeout=0.0)
+
+    assert image_locator.relative_clicks == [((50, 70, 1000, 800), *SEARCH_ACCOUNTS_TAB_REL)]
+
+
+def test_wechat_clicks_result_relative_to_souyisou_anchor(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    image_locator = FakeImageLocator()
+    image_locator.find_matches = [ImageMatch(40, 30, 0.95, "搜一搜.png")]
+    window = FakeUiElement("微信", process_name="WeChat.exe", width=1000, height=800, left=500, top=100)
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
+    automation.window = window
+
+    assert automation._click_first_search_result_visual()
+
+    assert image_locator.find_calls[0] == ("搜一搜.png", None, 0.72)
+    assert image_locator.xy_clicks == [(280, 270)]
+
+
+def test_wechat_search_result_window_wait_retries_until_app_ex_available(monkeypatch):
+    now = [0.0]
+    sleeps: list[float] = []
+    monkeypatch.setattr(wechat_module.time, "time", lambda: now[0])
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(wechat_module.time, "sleep", fake_sleep)
+    automation = PywinautoWechatAutomation()
+    calls: list[tuple[str, float, set[int] | None]] = []
+
+    def fake_switch(account_name, timeout=6.0, before_handles=None):
+        calls.append((account_name, timeout, before_handles))
+        return len(calls) >= 2
+
+    automation._switch_to_account_window = fake_switch
+
+    assert automation._wait_for_search_result_window(
+        "火眼审阅",
+        before_handles={1},
+        wait_seconds=1.0,
+    )
+    assert len(calls) >= 2
+    assert calls[0] == ("火眼审阅", 1.0, {1})
+    assert sleeps
 
 
 def test_wechat_clicks_contact_row_and_avoids_official_account_result():
@@ -346,15 +449,29 @@ def test_wechat_official_search_clicks_souyisou_template(monkeypatch):
     automation = PywinautoWechatAutomation(image_locator=image_locator)
     automation.window = FakeUiElement("微信", process_name="WeChat.exe")
     sent: list[str] = []
-    clicked_results: list[tuple[str, set[int] | None]] = []
+    actions: list[tuple[str, object, object]] = []
     automation._send_keys = lambda keys: sent.append(keys)
     automation._paste_or_type = lambda text: sent.append(text)
     automation._snapshot_window_handles = lambda: {1}
     automation._normalize_current_window = lambda: None
-    automation._switch_to_account_window = lambda _account, before_handles=None: True
+    automation._wait_for_search_result_window = (
+        lambda account, before_handles=None, wait_seconds=0.0: actions.append(
+            ("wait", account, (before_handles, wait_seconds))
+        )
+        or True
+    )
+    automation._click_search_accounts_tab = lambda timeout=3.0: actions.append(
+        ("tab", "账号", timeout)
+    ) or True
+    automation._click_first_account_result_after_tab = (
+        lambda account, before_handles=None: actions.append(
+            ("first", account, before_handles)
+        )
+        or True
+    )
     automation._click_service_account_result = (
-        lambda account, before_handles=None: clicked_results.append(
-            (account, before_handles)
+        lambda account, before_handles=None: actions.append(
+            ("fallback", account, before_handles)
         )
     )
 
@@ -362,7 +479,11 @@ def test_wechat_official_search_clicks_souyisou_template(monkeypatch):
 
     assert ("搜一搜.png", None, 0.74) in image_locator.calls
     assert sent == ["^f", "^a", "火眼审阅"]
-    assert clicked_results == [("火眼审阅", {1})]
+    assert actions == [
+        ("wait", "火眼审阅", ({1}, 30.0)),
+        ("tab", "账号", 3.0),
+        ("first", "火眼审阅", {1}),
+    ]
 
 
 def test_wechat_send_message_uses_chat_input_not_search_input():
@@ -557,20 +678,28 @@ def test_wechat_official_home_can_be_confirmed_by_template(monkeypatch):
 
 
 def test_wechat_send_message_uses_relative_input_fallback():
-    window = FakeUiElement("微信", process_name="WeChat.exe", width=1000, height=800)
-    automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
+    image_locator = FakeImageLocator()
+    window = FakeUiElement(
+        "微信",
+        process_name="WeChat.exe",
+        width=1000,
+        height=800,
+        left=50,
+        top=70,
+    )
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
     automation.window = window
     sent_keys: list[str] = []
     automation._paste_or_type = lambda text: sent_keys.append(text)
     automation._send_keys = lambda keys: sent_keys.append(keys)
-    automation._click_relative = lambda win, _rx, _ry: setattr(win, "clicked", True)
     automation._click_message_box_visual = lambda timeout=2.0: False
     automation._click_send_button_visual = lambda timeout=1.5: False
 
     automation.send_message("你好")
 
     assert sent_keys == ["你好", "{ENTER}"]
-    assert window.clicked is True
+    assert image_locator.relative_clicks == [((50, 70, 1000, 800), *CHAT_INPUT_REL)]
+    assert image_locator.xy_clicks == [(630, 774)]
 
 
 def test_send_official_account_message_searches_and_sends():
