@@ -1,4 +1,4 @@
-"""
+﻿"""
 Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 
 核心逻辑：OBSERVE → PLAN → ACT → OBSERVE ... 循环，
@@ -22,13 +22,11 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 from __future__ import annotations
 
 import json
-import hashlib
 import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
-from urllib.parse import urlparse
 
 from src.core.browser_manager import get_browser_manager
 from src.core.dom_explorer import summarize_page
@@ -45,17 +43,7 @@ from src.core.event_bus import (
     get_event_bus,
 )
 from src.core.experience import ExperienceManager, get_experience_manager
-from src.core.explore.executor import ExploreExecutor
-from src.core.explore.experience import ExperienceManager as ExploreExperienceManager
-from src.core.explore.models import (
-    Action,
-    ActionBatch,
-    ElementInfo,
-    ExploreConfig,
-    ExploreExperience,
-    SnapshotMode,
-)
-from src.core.explore.snapshot import SnapshotGenerator
+from src.core.explore.agent import ExploreAgent
 from src.core.intent_parser import LLMIntentParser, get_llm_intent_parser
 from src.core.llm_utils import chat_json_with_retry
 from src.core.script_engine import get_script_engine
@@ -68,58 +56,6 @@ from src.logging import bind_context, get_logger, log_timing
 from src.skill_library.registry import SkillRegistry, get_skill_registry
 
 logger = get_logger(__name__)
-
-
-_GENERIC_SEARCH_ENGINES: tuple[str, ...] = (
-    "baidu.com", "google.com", "bing.com",
-    "sogou.com", "360.cn", "yandex.com", "duckduckgo.com",
-)
-
-_EXPLORE_ENTRYPOINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    (
-        "gmail",
-        "https://mail.google.com/mail/u/0/#inbox",
-        ("gmail", "谷歌邮箱", "google mail"),
-    ),
-    ("github", "https://github.com/", ("github",)),
-    (
-        "xiaohongshu",
-        "https://www.xiaohongshu.com/",
-        ("小红书", "xiaohongshu", "rednote"),
-    ),
-    ("zhihu", "https://www.zhihu.com/", ("知乎", "zhihu")),
-    (
-        "bilibili",
-        "https://www.bilibili.com/",
-        ("bilibili", "哔哩哔哩", "哔哩", "b站"),
-    ),
-    ("douyin", "https://www.douyin.com/", ("douyin", "抖音")),
-    ("baidu", "https://www.baidu.com/", ("baidu", "百度")),
-    ("google", "https://www.google.com/", ("google", "谷歌")),
-    ("bing", "https://www.bing.com/", ("bing", "必应")),
-    ("weibo", "https://weibo.com/", ("weibo", "微博")),
-    ("taobao", "https://www.taobao.com/", ("taobao", "淘宝")),
-    ("jd", "https://www.jd.com/", ("jd", "京东")),
-)
-
-_PLATFORM_ACTION_WORDS = (
-    "搜索",
-    "搜",
-    "查找",
-    "查询",
-    "登录",
-    "登陆",
-    "发布",
-    "发送",
-    "发",
-    "评论",
-    "留言",
-    "打开",
-    "进入",
-    "问",
-    "提问",
-    "写",
-)
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +127,7 @@ class AgentStep:
     error: str = ""
     timestamp: float = 0.0
     mode: str = ""
-    actions: list[Action] = field(default_factory=list)
+    actions: list[Any] = field(default_factory=list)
     snapshot: Any | None = None
 
 
@@ -247,15 +183,7 @@ class AgentLoop:
         self._experience: ExperienceManager | None = None
         self._llm_parser: LLMIntentParser | None = None
         self._task_splitter: TaskSplitter | None = None
-        self._snapshot_gen: SnapshotGenerator | None = None
-        self._explore_executor: ExploreExecutor | None = None
-        self._explore_experience_mgr: ExploreExperienceManager | None = None
-        self._explore_config: ExploreConfig | None = None
-        self._last_explore_snapshot = None
-        self._current_explore_snapshot = None
-        self._last_panel_answer: str | None = None
-        self._explore_entry_bootstrap_attempted: set[str] = set()
-        self._just_navigated_to_entry: bool = False
+        self._explore_agent: ExploreAgent | None = None
 
     def run(self, task: str) -> AgentTaskResult:
         """执行一个自然语言任务。
@@ -451,14 +379,10 @@ class AgentLoop:
         state = AgentState.OBSERVE
         step_number = 0
         pending_script: str | None = None  # PLAN 阶段生成的脚本，传递给 ACT
-        pending_actions: list[Action] | None = None
+        pending_actions: list[Any] | None = None
         pending_mode: str = ""
         task_id = f"task_{int(time.time() * 1000)}"
-        self._last_panel_answer = None
-        self._last_explore_snapshot = None
-        self._current_explore_snapshot = None
-        self._explore_entry_bootstrap_attempted = set()
-        self._just_navigated_to_entry = False
+        self._ensure_explore_agent().reset_task_state()
 
         # 绑定任务级上下文，所有后续日志自动携带 task_id / task
         with bind_context(task_id=task_id, task=task):
@@ -621,415 +545,89 @@ class AgentLoop:
             )
             self._task_splitter = get_task_splitter(llm_caller=llm_caller)
 
-        if self._explore_config is None:
-            self._explore_config = self._build_explore_config()
+        self._ensure_explore_agent()
 
-        if self._snapshot_gen is None:
-            self._snapshot_gen = SnapshotGenerator(self._explore_config)
+    def _ensure_explore_agent(self) -> ExploreAgent:
+        if self._explore_agent is None:
+            self._explore_agent = ExploreAgent(
+                self._llm_parser,
+                browser_manager_getter=lambda: get_browser_manager(),
+            )
+        else:
+            self._explore_agent.update_llm_parser(self._llm_parser)
+        return self._explore_agent
 
-        if self._explore_experience_mgr is None:
-            from src.config import get_config
+    @property
+    def _explore_config(self):
+        return self._ensure_explore_agent().config
 
-            storage_dir = get_config().get("EXPERIENCE_STORAGE_DIR")
-            self._explore_experience_mgr = ExploreExperienceManager(storage_dir)
+    @_explore_config.setter
+    def _explore_config(self, value) -> None:
+        self._ensure_explore_agent().config = value
 
-    @staticmethod
-    def _build_explore_config() -> ExploreConfig:
-        from src.config import get_config
+    @property
+    def _explore_experience_mgr(self):
+        return self._ensure_explore_agent().experience_manager
 
-        cfg = get_config()
-        return ExploreConfig(
-            max_retries=int(cfg.get("EXPLORE_MAX_RETRIES", 3)),
-            action_timeout=int(cfg.get("EXPLORE_ACTION_TIMEOUT", 15000)),
-            snapshot_max_elements=int(cfg.get("EXPLORE_SNAPSHOT_MAX_ELEMENTS", 50)),
-            experience_upgrade_threshold=int(
-                cfg.get("EXPERIENCE_UPGRADE_THRESHOLD", 3)
-            ),
-            experience_confidence_threshold=float(
-                cfg.get("EXPERIENCE_CONFIDENCE_THRESHOLD", 0.8)
-            ),
-        )
+    @_explore_experience_mgr.setter
+    def _explore_experience_mgr(self, value) -> None:
+        self._ensure_explore_agent().experience_manager = value
+
+    @property
+    def _current_explore_snapshot(self):
+        return self._ensure_explore_agent().current_snapshot
+
+    @_current_explore_snapshot.setter
+    def _current_explore_snapshot(self, value) -> None:
+        self._ensure_explore_agent().current_snapshot = value
+
+    @property
+    def _snapshot_gen(self):
+        return self._ensure_explore_agent().snapshot_generator
+
+    @_snapshot_gen.setter
+    def _snapshot_gen(self, value) -> None:
+        self._ensure_explore_agent().snapshot_generator = value
+
+    @property
+    def _last_panel_answer(self):
+        return self._ensure_explore_agent().last_panel_answer
 
     def _bootstrap_initial_page(self, task: str) -> str | None:
-        """Navigate away from about:blank before the first observe when possible.
-
-        Three-tier strategy:
-        1. Hardcoded entrypoints (baidu, google, github, etc.)
-        2. LLM resolves target website URL
-        3. Search via Bing + LLM picks best result
-        """
-
-        bm = get_browser_manager()
-        page = bm.get_page()
-        if not self._is_blank_page(getattr(page, "url", "")):
-            return None
-
-        # Tier 1: Hardcoded entrypoints
-        target_url = self._resolve_initial_entry_url(task)
-        if target_url:
-            return self._goto_initial_entry_url(target_url)
-
-        # Tier 2: LLM resolves URL
-        if self._should_resolve_entry_with_llm(task):
-            self._explore_entry_bootstrap_attempted.add(task)
-            target_url = self._resolve_initial_entry_url_via_llm(task)
-            if target_url:
-                return self._goto_initial_entry_url(target_url)
-
-            # Tier 3: Search via Bing + LLM picks best
-            target_url = self._resolve_entry_url_via_search(task)
-            if target_url:
-                return self._goto_initial_entry_url(target_url)
-
-        return None
+        """Delegate first-page bootstrap to Explore mode."""
+        return self._ensure_explore_agent().bootstrap_initial_page(task)
 
     def _bootstrap_explore_entry_page(self, task: str) -> str | None:
-        """Use three-tier resolution before entering Explore from a blank page."""
-
-        if task in self._explore_entry_bootstrap_attempted:
-            return None
-
-        bm = get_browser_manager()
-        page = bm.get_page()
-        if not self._is_blank_page(getattr(page, "url", "")):
-            return None
-
-        self._explore_entry_bootstrap_attempted.add(task)
-
-        # Tier 1: Hardcoded entrypoints
-        target_url = self._resolve_initial_entry_url(task)
-        if not target_url:
-            # Tier 2: LLM resolves URL
-            if self._should_resolve_entry_with_llm(task):
-                target_url = self._resolve_initial_entry_url_via_llm(task)
-            # Tier 3: Search via Bing
-            if not target_url:
-                target_url = self._resolve_entry_url_via_search(task)
-
-        if not target_url:
-            return None
-
-        return self._goto_initial_entry_url(target_url)
-
-    def _goto_initial_entry_url(self, target_url: str) -> str | None:
-        page = get_browser_manager().get_page()
-        try:
-            try:
-                page.goto(target_url, wait_until="load")
-            except TypeError:
-                page.goto(target_url)
-        except Exception as exc:
-            logger.warning("Explore bootstrap navigation failed: %s", exc)
-            return None
-
-        logger.info("Explore bootstrap navigated to %s", target_url)
-        self._just_navigated_to_entry = True
-        return target_url
+        """Delegate Explore fallback entry-page bootstrap."""
+        return self._ensure_explore_agent().bootstrap_entry_page(task)
 
     @staticmethod
     def _is_blank_page(url: str | None) -> bool:
-        value = (url or "").strip().lower()
-        return value in {"", "about:blank"} or value.startswith("about:blank?")
+        return ExploreAgent.is_blank_page(url)
 
     @classmethod
     def _resolve_initial_entry_url(cls, task: str) -> str | None:
-        explicit_url = cls._extract_first_url(task)
-        if explicit_url:
-            return explicit_url
-
-        platform = cls._infer_target_platform(task)
-        if platform:
-            for name, url, _aliases in _EXPLORE_ENTRYPOINTS:
-                if name == platform:
-                    return url
-        return None
+        return ExploreAgent.resolve_initial_entry_url(task)
 
     @staticmethod
     def _extract_first_url(task: str) -> str | None:
-        match = re.search(r"https?://[^\s<>'\"，。；、]+", task)
-        if not match:
-            match = re.search(r"\bwww\.[^\s<>'\"，。；、]+", task, re.IGNORECASE)
-        if not match:
-            return None
-
-        url = match.group(0).rstrip(").,，。；;、]】\"'")
-        if not re.match(r"^https?://", url, re.IGNORECASE):
-            url = f"https://{url}"
-        return url
+        return ExploreAgent.extract_first_url(task)
 
     @classmethod
     def _infer_target_platform(cls, task: str) -> str | None:
-        mentions: list[tuple[int, str]] = []
-        action_pattern = "|".join(re.escape(word) for word in _PLATFORM_ACTION_WORDS)
-
-        # If task contains search-like verbs and mentions an email service,
-        # the user likely wants to search for info, not open the email site
-        _SEARCH_VERBS = re.compile(
-            r"(?:搜索|搜|查找|查询|查|找|search|how|怎么|如何|是什么|是什么)",
-            re.IGNORECASE,
-        )
-        _EMAIL_PLATFORMS = {"gmail", "outlook"}
-
-        for platform, _url, aliases in _EXPLORE_ENTRYPOINTS:
-            for alias in sorted(aliases, key=len, reverse=True):
-                alias_pattern = re.escape(alias)
-                patterns = (
-                    rf"(?:在|到|用|打开|进入|去)\s*{alias_pattern}(?:上|里|中)?",
-                    rf"{alias_pattern}(?:上|里|中)?\s*(?:{action_pattern})",
-                )
-                for pattern in patterns:
-                    for match in re.finditer(pattern, task, re.IGNORECASE):
-                        mentions.append((match.start(), platform))
-
-        if mentions:
-            best = max(mentions, key=lambda item: item[0])[1]
-            # Skip email platforms when task has search intent
-            if best in _EMAIL_PLATFORMS and _SEARCH_VERBS.search(task):
-                return None
-            return best
-
-        # Fallback: substring matching.
-        # If the task has search-like verbs, skip email/service platforms
-        # to avoid "谷歌邮箱怎么注册" → gmail/google when user wants to search.
-        _SERVICE_PLATFORMS = _EMAIL_PLATFORMS | {"google"}
-        has_search_intent = bool(_SEARCH_VERBS.search(task))
-        lowered = task.lower()
-        for platform, _url, aliases in _EXPLORE_ENTRYPOINTS:
-            if any(alias.lower() in lowered for alias in aliases):
-                if has_search_intent and platform in _SERVICE_PLATFORMS:
-                    continue
-                return platform
-        return None
+        return ExploreAgent.infer_target_platform(task)
 
     @classmethod
     def _should_resolve_entry_with_llm(cls, task: str) -> bool:
-        if cls._extract_first_url(task) or cls._infer_target_platform(task):
-            return False
-        return cls._extract_web_target_phrase(task) is not None
+        return ExploreAgent.should_resolve_entry_with_llm(task)
 
     @staticmethod
     def _extract_web_target_phrase(task: str) -> str | None:
-        actions = (
-            r"搜索|搜|查找|查询|查|找|询问|问|提问|登录|登陆|打开|进入|访问|"
-            r"search|ask|login|open|visit"
-        )
-        patterns = (
-            rf"(?:在|到|去|打开|进入|用)\s*([^，。,.；;\s]{{2,40}})\s*(?:上|里|中|网站)?\s*(?:{actions})",
-            rf"^\s*([^，。,.；;\s]{{2,40}})\s*(?:上|里|中|网站)?\s*(?:{actions})",
-        )
-        blocked = {
-            "帮我",
-            "请帮我",
-            "搜索",
-            "查询",
-            "查找",
-            "打开",
-            "进入",
-            "访问",
-            "本地",
-            "微信",
-            "wps",
-            "WPS",
-        }
-        for pattern in patterns:
-            match = re.search(pattern, task, re.IGNORECASE)
-            if not match:
-                continue
-            phrase = match.group(1).strip(" “\"'`")
-            if phrase and phrase not in blocked:
-                return phrase
-        return None
-
-    def _resolve_initial_entry_url_via_llm(self, task: str) -> str | None:
-        if not self._llm_parser or not self._llm_parser.available:
-            return None
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "should_open": {"type": "boolean"},
-                "url": {"type": ["string", "null"]},
-                "confidence": {"type": "number"},
-                "reason": {"type": "string"},
-            },
-            "required": ["should_open", "url", "confidence", "reason"],
-        }
-        prompt = (
-            "你是浏览器 Explore 模式的起始网页解析器。当前页面是 about:blank，"
-            "技能库和固定规则没有命中。请判断执行用户任务前是否需要先打开某个网页。\n\n"
-            f"用户任务: {task}\n\n"
-            "要求:\n"
-            "1. 如果任务明确提到某个网站、平台、购物网站、AI 对话网站或 Web 服务，返回它的官方入口 URL。\n"
-            "2. 购物网站搜索商品时，返回该购物网站主页，不要返回搜索引擎。\n"
-            "3. AI 网站询问问题时，优先返回该网站的对话/聊天入口；不知道具体对话入口时返回主页。\n"
-            "4. 如果任务是本地软件、微信/WPS/桌面客户端操作，或无法可靠判断网站，should_open=false。\n"
-            "5. 不要把未知站点任务转成百度/Google/Bing 搜索；目标是打开相关网站本身。\n"
-            "6. 如果只确定域名，也可以返回裸域名，系统会自动补 https://。\n"
-            "7. 不要编造不存在的网站；url 必须是相关网站的域名或完整 http/https 地址。\n"
-        )
-        try:
-            data = chat_json_with_retry(
-                self._llm_parser._client,
-                prompt,
-                system_prompt="只返回起始网页判断 JSON，不要输出解释。",
-                schema=schema,
-                temperature=0,
-                max_tokens=512,
-            )
-        except Exception as exc:
-            logger.warning("Explore entry URL LLM resolution failed: %s", exc)
-            return None
-
-        if not data.get("should_open"):
-            return None
-        try:
-            confidence = float(data.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0
-        if confidence < 0.55:
-            return None
-        return self._normalize_entry_url(data.get("url"))
-
-    def _resolve_entry_url_via_search(self, task: str) -> str | None:
-        """Tier 3: Search via Bing and let LLM pick the best matching URL.
-
-        1. Open bing.com in the current (blank) page
-        2. Search for the website mentioned in the task
-        3. Extract top search result URLs
-        4. Ask LLM to pick the one most likely to be the target site
-        """
-        if not self._llm_parser or not self._llm_parser.available:
-            return None
-
-        site_phrase = self._extract_web_target_phrase(task)
-        if not site_phrase:
-            site_phrase = task.strip()[:40]
-
-        search_query = f"{site_phrase} 官网"
-        bing_url = f"https://www.bing.com/search?q={search_query}"
-
-        page = get_browser_manager().get_page()
-        try:
-            try:
-                page.goto(bing_url, wait_until="domcontentloaded", timeout=15000)
-            except TypeError:
-                page.goto(bing_url)
-            try:
-                page.wait_for_timeout(2000)
-            except Exception:
-                pass
-        except Exception as exc:
-            logger.warning("Bing search navigation failed: %s", exc)
-            return None
-
-        try:
-            results = page.evaluate(
-                """
-                () => {
-                    const links = Array.from(document.querySelectorAll('h2 a[href^="http"], .b_algo a[href^="http"]'));
-                    return links.slice(0, 8).map(a => ({
-                        title: (a.textContent || '').trim().slice(0, 100),
-                        url: a.href
-                    })).filter(r => r.url && r.title);
-                }
-                """
-            )
-        except Exception as exc:
-            logger.warning("Bing result extraction failed: %s", exc)
-            return None
-
-        if not results or not isinstance(results, list):
-            logger.warning("No Bing search results found")
-            return None
-
-        lines = []
-        for i, r in enumerate(results[:6]):
-            title = r.get("title", "")
-            url = r.get("url", "")
-            lines.append(f"{i+1}. {title} — {url}")
-        results_text = "\n".join(lines)
-        schema = {
-            "type": "object",
-            "properties": {
-                "best_index": {"type": "integer", "minimum": 1, "maximum": min(len(results), 6)},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "reason": {"type": "string"},
-            },
-            "required": ["best_index", "confidence", "reason"],
-        }
-        prompt = (
-            f"用户任务: {task}\n\n"
-            f"以下是 Bing 搜索 \"{search_query}\" 的结果:\n"
-            f"{results_text}\n\n"
-            "请选出最可能是用户要访问的网站。"
-            "如果搜索结果中没有合适的网站，confidence 设为 0。"
-        )
-
-        try:
-            data = chat_json_with_retry(
-                self._llm_parser._client,
-                prompt,
-                system_prompt="只返回 JSON，不要输出解释。",
-                schema=schema,
-                temperature=0,
-                max_tokens=256,
-            )
-        except Exception as exc:
-            logger.warning("LLM search result selection failed: %s", exc)
-            # Rule-based fallback: pick first non-search-engine result
-            for r in results[:6]:
-                url = r.get("url", "")
-                if url and not any(
-                    engine in url.lower()
-                    for engine in ("bing.com", "google.com", "baidu.com", "sogou.com")
-                ):
-                    logger.info("Search fallback (rule-based): %s", url)
-                    return self._normalize_entry_url(url)
-            return None
-
-        try:
-            confidence = float(data.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0
-        if confidence < 0.5:
-            # LLM not confident — try first non-search-engine result
-            for r in results[:6]:
-                url = r.get("url", "")
-                if url and not any(
-                    engine in url.lower()
-                    for engine in ("bing.com", "google.com", "baidu.com", "sogou.com")
-                ):
-                    logger.info("Search fallback (low confidence): %s", url)
-                    return self._normalize_entry_url(url)
-            return None
-
-        best_idx = int(data.get("best_index", 1)) - 1
-        if 0 <= best_idx < len(results):
-            url = results[best_idx].get("url")
-            if url:
-                logger.info("Search-based entry resolved: %s", url)
-                return self._normalize_entry_url(url)
-
-        return None
+        return ExploreAgent.extract_web_target_phrase(task)
 
     @staticmethod
     def _normalize_entry_url(value: Any) -> str | None:
-        if not isinstance(value, str):
-            return None
-        url = value.strip().strip("'\"")
-        if not url:
-            return None
-        if not re.match(r"^https?://", url, re.IGNORECASE):
-            url = f"https://{url}"
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return None
-        if "." not in parsed.hostname and parsed.hostname not in {"localhost"}:
-            return None
-        if not parsed.path:
-            url = f"{url}/"
-        return url
-
+        return ExploreAgent.normalize_entry_url(value)
     # -------------------------------------------------------------------
     # Event emission helpers
     # -------------------------------------------------------------------
@@ -1182,8 +780,9 @@ class AgentLoop:
 
         # ── 0. If we just navigated to target site via entry resolution,
         #     skip skill matching and go directly to Explore mode ──
-        if self._just_navigated_to_entry:
-            self._just_navigated_to_entry = False
+        explore_agent = self._ensure_explore_agent()
+        if explore_agent.just_navigated_to_entry:
+            explore_agent.just_navigated_to_entry = False
             step.action = "跳转到目标站点，进入 Explore 模式"
             step.mode = "explore"
             step.result = "刚完成入口跳转，跳过技能匹配，直接 Explore"
@@ -1264,9 +863,9 @@ class AgentLoop:
             return AgentState.ACT
 
         # ── 3. Explore 经验复用 ──
-        experience = self._find_explore_experience(task, page_context.get("url", ""))
+        experience = explore_agent.find_experience(task, page_context.get("url", ""))
         if experience and experience.confidence > 0.7:
-            remapped_actions = self._prepare_explore_experience_actions(experience)
+            remapped_actions = explore_agent.prepare_experience_actions(experience)
             if remapped_actions:
                 step.action = f"Reuse Explore experience: {experience.task}"
                 step.mode = "explore_reuse"
@@ -1314,7 +913,7 @@ class AgentLoop:
 
         # ── 4. 规则生成脚本 ──
         script = self._generate_script(task, step.page_summary)
-        if script and self._should_skip_generated_script_for_explore(task, script):
+        if script and explore_agent.should_skip_generated_script(task, script):
             logger.info("PLAN: skipped generic script for site-scoped Explore task")
             script = None
         if script:
@@ -1333,9 +932,8 @@ class AgentLoop:
             return AgentState.ACT
 
         # ── 5. Explore 模式 ──
-        if self._last_explore_snapshot is not None:
-            batch = self._plan_explore_actions(task)
-            self._last_explore_snapshot = None
+        if explore_agent.has_pending_snapshot:
+            batch = explore_agent.plan_actions(task)
             if batch and batch.actions:
                 step.action = "执行 Explore 操作"
                 step.mode = "explore"
@@ -1361,363 +959,34 @@ class AgentLoop:
         return self._script_generator.generate(task, page_summary)
 
     def _should_skip_generated_script_for_explore(self, task: str, script: str) -> bool:
-        if not self._should_resolve_entry_with_llm(task):
-            return False
-        try:
-            page_url = get_browser_manager().get_page().url
-        except Exception:
-            page_url = ""
-        if not page_url:
-            return False
-        lowered_script = script.lower()
-        has_search_engine_script = any(
-            engine in lowered_script for engine in _GENERIC_SEARCH_ENGINES
+        return self._ensure_explore_agent().should_skip_generated_script(task, script)
+
+    def _find_explore_experience(self, task: str, url: str):
+        return self._ensure_explore_agent().find_experience(task, url)
+
+    def _prepare_explore_experience_actions(self, experience):
+        return self._ensure_explore_agent().prepare_experience_actions(
+            experience,
+            executor=self._ensure_explore_executor(),
         )
-        if not has_search_engine_script:
-            return False
-        # Skip if on blank page
-        if self._is_blank_page(page_url):
-            return True
-        # Skip if on a search results page
-        if any(engine in page_url.lower() for engine in ("bing.com/search", "google.com/search", "baidu.com/s")):
-            return True
-        # Skip if we successfully navigated to a non-search-engine site
-        # (the script should use Explore mode on that site, not redirect to baidu)
-        if not any(engine in page_url.lower() for engine in _GENERIC_SEARCH_ENGINES):
-            return True
-        return False
-
-    def _find_explore_experience(
-        self,
-        task: str,
-        url: str,
-    ) -> ExploreExperience | None:
-        if not self._explore_experience_mgr:
-            return None
-        site = self._extract_site(url)
-        if not site:
-            return None
-        return self._explore_experience_mgr.find_similar(task, site)
-
-    def _prepare_explore_experience_actions(
-        self,
-        experience: ExploreExperience,
-    ) -> list[Action] | None:
-        """Remap stored experience refs to the current page snapshot."""
-
-        if not experience.actions:
-            return None
-
-        page = get_browser_manager().get_page()
-        if self._snapshot_gen is None:
-            self._snapshot_gen = SnapshotGenerator(self._explore_config)
-        snapshot = self._snapshot_gen.snapshot(page, mode=SnapshotMode.COMPACT)
-        self._current_explore_snapshot = snapshot
-        self._ensure_explore_executor().update_snapshot(snapshot)
-
-        by_selector: dict[str, str] = {}
-        by_role_name: dict[tuple[str, str], str] = {}
-        for node in self._iter_snapshot_nodes(snapshot.nodes):
-            if not node.ref:
-                continue
-            if node.selector:
-                by_selector[node.selector] = node.ref
-            by_role_name[(node.role, node.name)] = node.ref
-
-        remapped: list[Action] = []
-        for stored in experience.actions:
-            action = Action.model_validate(stored.model_dump(mode="json"))
-            if not action.ref:
-                remapped.append(action)
-                continue
-
-            element = experience.element_map.get(action.ref)
-            new_ref = None
-            if element:
-                new_ref = by_selector.get(element.selector)
-                if not new_ref:
-                    new_ref = by_role_name.get((element.role, element.name))
-            if not new_ref:
-                return None
-
-            action.ref = new_ref
-            action.snapshot_v = snapshot.version
-            remapped.append(action)
-
-        return remapped
 
     def _save_explore_experience(self, step: AgentStep) -> None:
-        """Persist a successful Explore action sequence for future reuse."""
+        self._ensure_explore_agent().save_experience(step)
 
-        if not self._explore_experience_mgr or not step.actions:
-            return
-        config = self._explore_config or ExploreConfig()
-        if len(step.actions) < config.experience_save_threshold:
-            return
-
-        page = get_browser_manager().get_page()
-        current_url = str(getattr(page, "url", "") or "")
-        site = self._extract_site(current_url)
-        if not site:
-            return
-
-        snapshot = self._current_explore_snapshot
-        if snapshot is None:
-            return
-
-        selector_map = self._ensure_explore_executor().get_ref_locator_mapping()
-        snapshot_nodes = {
-            node.ref: node for node in self._iter_snapshot_nodes(snapshot.nodes) if node.ref
-        }
-
-        element_map: dict[str, ElementInfo] = {}
-        for action in step.actions:
-            if not action.ref:
-                continue
-            node = snapshot_nodes.get(action.ref)
-            selector = selector_map.get(action.ref) or (node.selector if node else "")
-            if not selector:
-                continue
-            element_map[action.ref] = ElementInfo(
-                selector=selector,
-                role=node.role if node else "",
-                name=node.name if node else "",
-                tag=node.tag or "" if node else "",
-            )
-
-        if not element_map:
-            return
-
-        persisted_actions = []
-        for action in step.actions:
-            cloned = Action.model_validate(action.model_dump(mode="json"))
-            cloned.snapshot_v = None
-            persisted_actions.append(cloned)
-
-        task = step.task or step.action or "explore task"
-        payload = {
-            "task": task,
-            "site": site,
-            "actions": [a.model_dump(mode="json") for a in persisted_actions],
-        }
-        digest = hashlib.sha1(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest()[:12]
-        experience = ExploreExperience(
-            id=f"explore_{site}_{digest}",
-            task=task,
-            site=site,
-            url_pattern=self._url_pattern(current_url),
-            actions=persisted_actions,
-            action_count=len(persisted_actions),
-            element_map=element_map,
-            snapshot_roles=[node.role for node in self._iter_snapshot_nodes(snapshot.nodes)],
-            snapshot_names=[
-                node.name for node in self._iter_snapshot_nodes(snapshot.nodes) if node.name
-            ],
-        )
-        self._explore_experience_mgr.save(experience)
-
-    def _iter_snapshot_nodes(self, nodes: list[Any]):
-        for node in nodes:
-            yield node
-            yield from self._iter_snapshot_nodes(node.children)
-
-    @staticmethod
-    def _url_pattern(url: str) -> str:
-        from urllib.parse import urlparse
-
-        parsed = urlparse(url)
-        if parsed.scheme and parsed.hostname:
-            return f"{parsed.scheme}://{parsed.hostname}/*"
-        return url
-
-    def _ensure_explore_executor(self) -> ExploreExecutor:
-        bm = get_browser_manager()
-        page = bm.get_page()
-        if self._snapshot_gen is None:
-            self._snapshot_gen = SnapshotGenerator(self._explore_config)
-        if (
-            self._explore_executor is None
-            or getattr(self._explore_executor, "_page", None) is not page
-        ):
-            self._explore_executor = ExploreExecutor(
-                page,
-                self._snapshot_gen,
-                self._explore_config,
-                browser_manager=bm,
-            )
-        return self._explore_executor
+    def _ensure_explore_executor(self):
+        return self._ensure_explore_agent().ensure_executor()
 
     def _do_explore(self, step: AgentStep, task: str) -> AgentState:
         """Generate an ARIA snapshot for Explore planning."""
-
-        page = get_browser_manager().get_page()
-        if self._snapshot_gen is None:
-            self._snapshot_gen = SnapshotGenerator(self._explore_config)
-        snapshot = self._snapshot_gen.snapshot(page, mode=SnapshotMode.COMPACT)
-        step.snapshot = snapshot
-        self._last_explore_snapshot = snapshot
-        self._current_explore_snapshot = snapshot
-        step.page_summary = json.dumps(snapshot.model_dump(mode="json"), ensure_ascii=False)
-        step.result = (
-            f"Explore 快照: {snapshot.version} "
-            f"(可交互元素 {snapshot.interactive_count} 个)"
-        )
-        self._ensure_explore_executor().update_snapshot(snapshot)
+        self._ensure_explore_agent().snapshot(step)
         return AgentState.PLAN
 
-    def _plan_explore_actions(self, task: str) -> ActionBatch | None:
-        if not self._llm_parser or not self._llm_parser.available:
-            return None
-        if self._last_explore_snapshot is None:
-            return None
-
-        snapshot = self._last_explore_snapshot
-        schema = {
-            "type": "object",
-            "properties": {
-                "actions": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "action": {
-                                "type": "string",
-                                "enum": [
-                                    "click",
-                                    "fill",
-                                    "hover",
-                                    "select",
-                                    "check",
-                                    "uncheck",
-                                    "goto",
-                                    "back",
-                                    "forward",
-                                    "scroll",
-                                    "wait",
-                                    "screenshot",
-                                    "double_click",
-                                    "keyboard",
-                                    "drag",
-                                    "upload",
-                                    "evaluate",
-                                    "pause_for_input",
-                                    "click_at",
-                                    "type",
-                                    "dialog",
-                                ],
-                            },
-                            "ref": {"type": ["string", "null"]},
-                            "value": {"type": ["string", "null"]},
-                            "url": {"type": ["string", "null"]},
-                            "direction": {"type": ["string", "null"]},
-                            "amount": {"type": ["integer", "null"]},
-                            "condition": {
-                                "type": ["string", "null"],
-                                "enum": [
-                                    "none",
-                                    "load",
-                                    "networkidle",
-                                    "selector_visible",
-                                    "text_visible",
-                                    None,
-                                ],
-                            },
-                            "timeout": {"type": ["integer", "null"]},
-                            "title": {"type": ["string", "null"]},
-                            "fields": {
-                                "type": ["array", "null"],
-                                "items": {"type": "object"},
-                            },
-                            "snapshot_v": {"type": ["string", "null"]},
-                            "intent": {"type": ["string", "null"]},
-                            "reasoning": {"type": ["string", "null"]},
-                            "x": {"type": ["integer", "null"]},
-                            "y": {"type": ["integer", "null"]},
-                            "dialog_action": {"type": ["string", "null"]},
-                            "delay": {"type": ["integer", "null"]},
-                        },
-                        "required": ["action"],
-                    },
-                }
-            },
-            "required": ["actions"],
-        }
-        prompt = (
-            "你是 Explore 模式浏览器操作规划器。根据用户任务和 ARIA 快照，"
-            "输出一个短的原子操作数组。\n\n"
-            f"用户任务: {task}\n\n"
-            f"当前快照版本: {snapshot.version}\n"
-            f"ARIA 快照:\n{json.dumps(snapshot.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-            "规则:\n"
-            "2. click/double_click/fill/select/check/uncheck/hover/drag/upload 必须填写 ref。\n"
-            "3. fill/select/type/upload 必须填写 value。\n"
-            "4. keyboard 的 value 是按键名（Enter, Escape, Tab, Control+a 等）。\n"
-            "5. drag 的 ref 是源元素，value 是目标元素的 ref。\n"
-            "6. click_at 需要 x, y 视口坐标（用于 canvas 等无 ref 元素）。\n"
-            "7. 会导致页面跳转的最后一步请加 condition=load 或 networkidle。\n"
-            "8. 每个使用 ref 的动作都填写 snapshot_v 为当前快照版本。\n"
-            "9. 不要编造快照里不存在的 ref。\n"
-            "10. 如果任务是在当前网站搜索商品/内容，优先找到搜索框，fill 搜索关键词，再 keyboard(Enter) 或 click 搜索按钮。\n"
-            "11. 如果任务是在 AI/问答/聊天网站询问问题，优先找到消息输入框，fill 用户问题，再 keyboard(Enter) 或 click 发送按钮。\n"
-            "12. 如果刚完成登录或页面发生变化，不要继续使用旧页面假设；等待重新快照后再规划。\n"
-            "13. 遇到登录、验证码、人机验证、缺少必要信息或不确定下一步时，"
-            "使用 pause_for_input 暂停询问用户。pause_for_input 的 value 是问题文本，"
-            "可用 [选项] 提供快捷选择；如需结构化输入可填写 fields。\n"
-            "14. pause_for_input 应作为本批次最后一步。\n"
-            "15. 每个动作尽量填写 intent（意图）和 reasoning（推理）帮助调试。\n"
-        )
-        if self._last_panel_answer:
-            prompt += f"\n\n上一次用户回答: {self._last_panel_answer}"
-        try:
-            data = chat_json_with_retry(
-                self._llm_parser._client,
-                prompt,
-                system_prompt="只返回 Explore ActionBatch JSON，不要输出解释。",
-                schema=schema,
-                temperature=0,
-                max_tokens=1024,
-            )
-            data = self._normalize_explore_action_batch_data(data)
-            batch = ActionBatch.model_validate(data)
-        except Exception as exc:
-            logger.warning("Explore planner failed: %s", exc)
-            return None
-
-        for action in batch.actions:
-            if action.ref and not action.snapshot_v:
-                action.snapshot_v = snapshot.version
-        return batch
+    def _plan_explore_actions(self, task: str):
+        return self._ensure_explore_agent().plan_actions(task)
 
     @staticmethod
     def _normalize_explore_action_batch_data(data: Any) -> Any:
-        """Accept common LLM shape drift while preserving the ActionBatch contract."""
-
-        if isinstance(data, list):
-            return {"actions": data}
-        if not isinstance(data, dict):
-            return data
-
-        if "actions" in data:
-            actions = data.get("actions")
-            if isinstance(actions, dict) and "action" in actions:
-                normalized = dict(data)
-                normalized["actions"] = [actions]
-                return normalized
-            return data
-
-        if "action" in data:
-            return {"actions": [data]}
-
-        for key in ("steps", "operations"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return {"actions": value, "task_id": data.get("task_id")}
-            if isinstance(value, dict) and "action" in value:
-                return {"actions": [value], "task_id": data.get("task_id")}
-
-        return data
+        return ExploreAgent.normalize_action_batch_data(data)
 
     @staticmethod
     def _extract_login_credentials(task: str) -> tuple[str | None, str | None]:
@@ -2612,28 +1881,11 @@ class AgentLoop:
 
     def _do_explore_act(self, step: AgentStep) -> AgentState:
         """Execute Explore actions."""
-
-        if not step.actions:
-            step.result = "无 Explore 操作指令"
-            return AgentState.FAILED
-
-        executor = self._ensure_explore_executor()
-        result = executor.execute(ActionBatch(actions=step.actions))
-        if result.success:
-            step.success = True
-            step.result = f"Explore 执行成功: {result.status}"
-            for action_result in result.results:
-                if action_result.action in ("panel_prompt", "pause_for_input") and action_result.value is not None:
-                    self._last_panel_answer = action_result.value
-            if result.need_snapshot:
-                return AgentState.EXPLORE
-            self._save_explore_experience(step)
-            return AgentState.DONE
-
-        step.success = False
-        step.error = result.error or "Explore 执行失败"
-        step.result = f"Explore 执行失败: {step.error[:100]}"
-        return AgentState.FAILED
+        state = self._ensure_explore_agent().execute(
+            step,
+            executor=self._ensure_explore_executor(),
+        )
+        return AgentState(state)
 
     def _try_heal(self, step: AgentStep) -> AgentState:
         """尝试自愈：用视觉 fallback 重试。"""
@@ -2771,3 +2023,7 @@ def run_task(
 
     agent = AgentLoop(max_steps=max_steps, library_dir=library_dir)
     return agent.run(task)
+
+
+
+
