@@ -905,6 +905,12 @@ skills:
           - "(?:内容|正文|文章内容|body|content)\\s*(?:是|为|:|：)?\\s*(.+)$"
           - "(?:在|到)?知乎(?:上)?(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
           - "(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
+      add-picture:
+        type: boolean
+        required: false
+        description: "是否在文章正文中插入 AI 生成图片"
+        extract_patterns:
+          - "(?:(配图|加图|加图片|生成图片|插入图片|AI\\s*配图|ai\\s*picture|add[-_ ]?picture))"
     confirm_before_run: true
 
   - id: "domain/zhihu_approve"
@@ -917,13 +923,12 @@ skills:
     examples:
       - "在知乎给一篇文章点赞"
     params:
-      keyword:
-        type: quoted
+      article_url:
+        type: url
         required: true
-        description: "文章内容"
+        description: "对应操作的文章地址"
         extract_patterns:
-          - "(?:在|到)?知乎(?:上)?(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
-          - "(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
+          - "(https?://[^\\s，。！？；;]+)"
     confirm_before_run: true
 
   - id: "domain/zhihu_search"
@@ -962,6 +967,12 @@ skills:
         type: keyword
         required: true
         description: "评论内容"
+      article_url:
+        type: url
+        required: true
+        description: "对应操作的文章地址"
+        extract_patterns:
+          - "(https?://[^\\s，。！？；;]+)"
 
   - id: "domain/zhihu_answer"
     name: "知乎回答"
@@ -977,7 +988,13 @@ skills:
       keyword:
         type: keyword
         required: true
-        description: "评论内容"
+        description: "回答内容"
+      article_url:
+        type: url
+        required: true
+        description: "对应操作的文章地址"
+        extract_patterns:
+          - "(https?://[^\\s，。！？；;]+)"
 
   - id: "domain/zhihu_question"
     name: "知乎提问题"

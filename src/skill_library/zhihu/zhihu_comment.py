@@ -1,4 +1,3 @@
-REVIEW_URL = "https://zhuanlan.zhihu.com/p/2055675816818774461"
 SIGN_URL="https://www.zhihu.com/signin"
 
 def _js_string(value: str) -> str:
@@ -10,13 +9,17 @@ def _js_string(value: str) -> str:
     return f'"{text}"'
 
 
-def run(keyword: str):
+def run(keyword: str, article_url: str = ""):
     """Open Zhihu article page and fill the comment editor with keyword."""
+    article_url = str(article_url or "").strip()
+    if not article_url:
+        raise RuntimeError("Missing Zhihu article URL for comment")
+
     if not ensure_auth("zhihu", SIGN_URL):
         log("Zhihu login state not confirmed; skip comment")
         return
 
-    goto(REVIEW_URL)
+    goto(article_url)
 
     editor_selector = ".Comments-container .public-DraftEditor-content[contenteditable='true']"
     wait_for_element(editor_selector, timeout=20)

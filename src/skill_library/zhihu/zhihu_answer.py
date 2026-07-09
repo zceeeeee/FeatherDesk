@@ -1,4 +1,3 @@
-ANSWER_URL = "https://www.zhihu.com/question/2054905087156342820"
 SIGN_URL="https://www.zhihu.com/signin"
 
 def _js_string(value: str) -> str:
@@ -10,13 +9,17 @@ def _js_string(value: str) -> str:
     return f'"{text}"'
 
 
-def run(keyword: str):
+def run(keyword: str, article_url: str = ""):
     """Open Zhihu question page, write an answer, and publish it."""
+    article_url = str(article_url or "").strip()
+    if not article_url:
+        raise RuntimeError("Missing Zhihu article URL for answer")
+
     if not ensure_auth("zhihu", SIGN_URL):
         log("Zhihu login state not confirmed; skip answer")
         return
 
-    goto(ANSWER_URL)
+    goto(article_url)
 
     answer_button = "button.Button.Button--blue"
     wait_for_element(answer_button, timeout=20)
