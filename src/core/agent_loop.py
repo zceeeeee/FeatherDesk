@@ -1741,13 +1741,21 @@ class AgentLoop:
                 logger.warning("LLM 命中技能 '%s' 但无法获取源码", chosen_id)
                 return None
 
+            if chosen_skill.params:
+                script = self._skill_router._build_parametrized_script(
+                    source_code,
+                    chosen_skill,
+                    task,
+                )
             # 检查源码是否已有独立 run() 调用，如果有则直接用
             import re as _re
 
             code_without_defs = _re.sub(
                 r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code
             )
-            if "run(" in code_without_defs:
+            if chosen_skill.params:
+                pass
+            elif "run(" in code_without_defs:
                 script = source_code
             else:
                 # 让 AI 根据用户命令修改脚本
@@ -1780,6 +1788,16 @@ class AgentLoop:
                     script = "\n".join(lines[1:])
                 if script.endswith("```"):
                     script = script[:-3].rstrip()
+
+                try:
+                    compile(script, "<llm_generated_script>", "exec")
+                except SyntaxError as exc:
+                    logger.warning(
+                        "LLM returned non-executable script for %s: %s",
+                        chosen_id,
+                        exc,
+                    )
+                    return None
 
             logger.info("LLM 意图解析: %s", chosen_id)
 

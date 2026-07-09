@@ -905,6 +905,12 @@ skills:
           - "(?:内容|正文|文章内容|body|content)\\s*(?:是|为|:|：)?\\s*(.+)$"
           - "(?:在|到)?知乎(?:上)?(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
           - "(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
+      add-picture:
+        type: boolean
+        required: false
+        description: "是否在文章正文中插入 AI 生成图片"
+        extract_patterns:
+          - "(?:(配图|加图|加图片|生成图片|插入图片|AI\\s*配图|ai\\s*picture|add[-_ ]?picture))"
     confirm_before_run: true
 
   - id: "domain/zhihu_approve"

@@ -46,6 +46,11 @@ class TaskSplitter:
         re.IGNORECASE,
     )
 
+    _MODIFIER_TASK_PATTERN = re.compile(
+        r"^\s*(?:配图|加图|加图片|生成图片|插入图片|AI\s*配图|ai\s*picture|add[-_ ]?picture)\s*$",
+        re.IGNORECASE,
+    )
+
     def __init__(self, llm_caller: Any = None) -> None:
         """
         Args:
@@ -90,13 +95,14 @@ class TaskSplitter:
         if len(top_segments) <= 1 and self._llm_caller:
             llm_tasks = self._llm_split(task)
             if llm_tasks and len(llm_tasks) > 1:
-                top_segments = llm_tasks
+                top_segments = self._merge_modifier_tasks(llm_tasks)
 
         # 无法拆分 → 单任务（但先检查是否有分号）
         if len(top_segments) <= 1:
             # 检查是否纯分号分隔（如 "a;b;c"）
             sub_tasks = self._semicolon_split(task)
             sub_tasks = [t.strip() for t in sub_tasks if t.strip()]
+            sub_tasks = self._merge_modifier_tasks(sub_tasks)
             if len(sub_tasks) > 1:
                 return [TaskGroup(tasks=sub_tasks, sequential=True)]
             return [TaskGroup(tasks=[task])]
@@ -111,6 +117,7 @@ class TaskSplitter:
             # 按分号拆分
             sub_tasks = self._semicolon_split(segment)
             sub_tasks = [t.strip() for t in sub_tasks if t.strip()]
+            sub_tasks = self._merge_modifier_tasks(sub_tasks)
 
             if not sub_tasks:
                 sub_tasks = [segment]
@@ -128,6 +135,24 @@ class TaskSplitter:
             [g.tasks for g in groups],
         )
         return groups
+
+    @classmethod
+    def _is_modifier_task(cls, task: str) -> bool:
+        return bool(cls._MODIFIER_TASK_PATTERN.fullmatch(task or ""))
+
+    @classmethod
+    def _merge_modifier_tasks(cls, tasks: List[str]) -> List[str]:
+        """Merge short modifiers like '配图' back into the previous task."""
+        merged: List[str] = []
+        for task in tasks:
+            text = task.strip()
+            if not text:
+                continue
+            if cls._is_modifier_task(text) and merged:
+                merged[-1] = f"{merged[-1]} {text}"
+                continue
+            merged.append(text)
+        return merged
 
     def split_flat(self, task: str) -> List[str]:
         """兼容旧接口：返回扁平的子任务列表（忽略分组信息）。"""

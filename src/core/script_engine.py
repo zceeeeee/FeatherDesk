@@ -239,6 +239,25 @@ class ScriptEngine:
             selector_list = [selector] + list(fallbacks)
             return do_click(page, selector_list)
 
+        def safe_mouse_click(x: float, y: float) -> dict:
+            page = self._get_browser_manager().get_page()
+            page.mouse.move(float(x), float(y))
+            page.mouse.down()
+            page.mouse.up()
+            return {"success": True, "x": float(x), "y": float(y)}
+
+        def safe_hover(selector: str, *fallbacks: str) -> dict:
+            page = self._get_browser_manager().get_page()
+            selector_list = [selector] + list(fallbacks)
+            last_error: Exception | None = None
+            for item in selector_list:
+                try:
+                    page.locator(item).first.hover(timeout=10000)
+                    return {"success": True, "selector": item}
+                except Exception as exc:
+                    last_error = exc
+            raise RuntimeError(f"hover failed: {last_error}")
+
         # 安全的 fill（支持选择器列表）
         def safe_fill(selector: str, value: str, *fallbacks: str) -> dict:
             page = self._get_browser_manager().get_page()
@@ -256,6 +275,8 @@ class ScriptEngine:
         # 注入原语层函数
         ns["goto"] = safe_goto
         ns["click"] = safe_click
+        ns["mouse_click"] = safe_mouse_click
+        ns["hover"] = safe_hover
         ns["fill"] = safe_fill
         ns["screenshot"] = safe_screenshot
         ns["close_browser"] = safe_close_browser
@@ -473,6 +494,7 @@ class ScriptEngine:
             "wait_for_navigation",
             "wait_for_element",
             "mouse_click",
+            "hover",
             "type_text",
             "press_key",
             "upload_file",
