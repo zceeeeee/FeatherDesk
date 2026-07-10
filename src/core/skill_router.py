@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -209,13 +210,16 @@ class SkillRouter:
                 )
 
         top_skill, top_score = candidates[0]
+        # 高置信命中时，单独取 trigger_patterns 已捕获的参数（如搜索关键词），
+        # 透传给 build_script，避免后续 rule/LLM 重复抽取。
+        top_captured = self._match_pattern(top_skill, task.lower())[1]
 
         if (
             top_skill.id == "domain/xiaohongshu_publish"
             and top_score >= 0.65
             and re.search(r"(发布内容|发布|发表|发帖).+['\"“‘].+['\"”’]", task, re.DOTALL)
         ):
-            script = self.build_script(top_skill, task)
+            script = self.build_script(top_skill, task, captured=top_captured)
             return SkillDecision(
                 skill=top_skill,
                 confidence=0.85,
@@ -226,7 +230,7 @@ class SkillRouter:
 
         # 高分 → 直接命中（严格：必须达到阈值，不论候选数量）
         if top_score >= 0.8:
-            script = self.build_script(top_skill, task)
+            script = self.build_script(top_skill, task, captured=top_captured)
             return SkillDecision(
                 skill=top_skill,
                 confidence=min(top_score, 1.0),
@@ -429,16 +433,89 @@ class SkillRouter:
         )
         return any(marker in query_lower for marker in send_markers)
 
+    def _match_pattern(
+        self, skill: SkillRouterInfo, query_lower: str
+    ) -> tuple[float, Optional[str]]:
+        """对 trigger_patterns 做正则匹配，返回 (score, captured)。
+
+        - 无 trigger_patterns 或全不命中 → (0.0, None)
+        - 命中但 pattern 无捕获组 → (0.95, None)
+        - 命中且 group(1) 非空 → (0.95, captured)，captured 即已抽取的关键词等参数
+        """
+        if not skill.trigger_patterns:
+            return 0.0, None
+        for pattern in skill.trigger_patterns:
+            match = re.search(pattern, query_lower, re.IGNORECASE | re.DOTALL)
+            if match:
+                # 有捕获组且 group(1) 非空 → 透传已抽取值
+                captured: Optional[str] = None
+                if match.groups():
+                    g1 = match.group(1)
+                    if g1:
+                        captured = g1.strip()
+                return 0.95, captured
+        return 0.0, None
+
+    @staticmethod
+    def _resolve_captured_param(
+        skill: SkillRouterInfo, captured: Optional[str]
+    ) -> Optional[str]:
+        """把 trigger_patterns 捕获的值映射到技能 params 中的目标字段名。
+
+        约定：捕获值语义为"关键词/目标文本"，优先填入 params 中第一个
+        type == "keyword" 的字段；若没有，再退而求其次取第一个 string 型
+        必填字段。无法确定目标时返回 None（captured 不被采用）。
+        """
+        if not captured or not skill.params:
+            return None
+        for name, meta in skill.params.items():
+            if meta.get("type") == "keyword":
+                return name
+        for name, meta in skill.params.items():
+            if meta.get("required") and meta.get("type") in {"string", "url", "content"}:
+                return name
+        return None
+
+    # 口语前缀助词：作为关键词开头时无歧义，确定性剔除。
+    # 仅匹配开头，避免误伤关键词本身（如「一下科技公司」是合法关键词，
+    # 但「一下」作为开头几乎都是「查一下/搜一下」的助词残留——此处的取舍：
+    # 搜索场景下开头「一下」判定为助词，极小概率误伤）。
+    _KEYWORD_PREFIX_NOISE = (
+        "一下", "查查", "帮我", "麻烦", "请", "顺便", "帮忙",
+    )
+
+    @classmethod
+    def _strip_keyword_prefix_noise(cls, keyword: str) -> str:
+        """剔除关键词开头的口语助词残留。
+
+        「百度查一下台风近况」经 rule/captured 抽出「一下台风近况」，
+        开头「一下」是「查一下」的助词残留，剔除后得「台风近况」。
+        只剔开头、只剔已知的无歧义助词，避免过度清理。
+        """
+        if not keyword:
+            return keyword
+        cleaned = keyword
+        changed = True
+        while changed:
+            changed = False
+            for prefix in cls._KEYWORD_PREFIX_NOISE:
+                if cleaned.startswith(prefix):
+                    after = cleaned[len(prefix):]
+                    # 只在剔除后仍有实质内容时才剔，避免剔空
+                    if after.strip():
+                        cleaned = after.lstrip()
+                        changed = True
+        return cleaned
+
     def _match_score(self, skill: SkillRouterInfo, query_lower: str) -> float:
         """计算技能与查询的匹配分数 (0.0 ~ 1.0)。"""
         score = 0.0
 
         # 严格 trigger：有 trigger_patterns 时，只认可完整语义正则。
+        # 命中时捕获的参数由 _keyword_filter 单独透传，这里只算分。
         if skill.trigger_patterns:
-            for pattern in skill.trigger_patterns:
-                if re.search(pattern, query_lower, re.IGNORECASE | re.DOTALL):
-                    return 0.95
-            return 0.0
+            score, _ = self._match_pattern(skill, query_lower)
+            return score
 
         # 触发词匹配（核心信号，权重最高）
         matched_triggers = 0
@@ -614,13 +691,19 @@ class SkillRouter:
     # 脚本构建
     # -------------------------------------------------------------------
 
-    def build_script(self, skill: SkillRouterInfo, task: str) -> str:
+    def build_script(
+        self, skill: SkillRouterInfo, task: str, captured: Optional[str] = None
+    ) -> str:
         """根据技能定义和任务描述生成可执行脚本。
 
         流程:
         1. 读取技能源码
         2. 如果有 params 声明 → 用 regex 从任务中提取参数 → 拼 run() 调用
         3. 如果没有 params → 委托给旧的关键词提取逻辑
+
+        Args:
+            captured: trigger_patterns 命中时已捕获的参数（如搜索关键词），
+                      优先于 rule/LLM 抽取，避免重复劳动。无捕获组时为 None。
         """
         if not skill.source_file or not self._library_dir:
             return ""
@@ -639,7 +722,7 @@ class SkillRouter:
 
         # 有参数声明 → 通用参数提取
         if skill.params:
-            return self._build_parametrized_script(source_code, skill, task)
+            return self._build_parametrized_script(source_code, skill, task, captured)
 
         # 无参数声明 → 使用通用关键词提取，避免 AgentLoop 再拼特化脚本。
         return self._build_keyword_script(source_code, task)
@@ -649,8 +732,13 @@ class SkillRouter:
         source_code: str,
         skill: SkillRouterInfo,
         task: str,
+        captured: Optional[str] = None,
     ) -> str:
-        """根据 params 声明从任务中提取参数，生成 run() 调用。"""
+        """根据 params 声明从任务中提取参数，生成 run() 调用。
+
+        captured 优先级：若 trigger_patterns 已捕获参数，且对应字段 rule
+        抽取为空，则用 captured 填充该字段并跳过 LLM 抽取。
+        """
         extracted: Dict[str, str] = {param_name: "-1" for param_name in skill.params}
 
         for param_name, param_def in skill.params.items():
@@ -658,7 +746,41 @@ class SkillRouter:
             if value:
                 extracted[param_name] = value
 
-        # 构造 run() 调用
+        # trigger_patterns 已捕获的参数作为 keyword 候选初值
+        captured_target = self._resolve_captured_param(skill, captured)
+        if captured_target and extracted.get(captured_target, "-1") == "-1":
+            extracted[captured_target] = captured
+
+        # keyword 字段：抽到候选值 → 确定性前缀清理（无歧义，不依赖 LLM）
+        # rule/trigger_patterns 抽出的关键词开头可能残留「一下/查查/帮我/请」等
+        # 口语助词，这类前缀无歧义（不会是关键词本身），确定性剔除。
+        for param_name, param_def in skill.params.items():
+            if param_def.get("type") != "keyword":
+                continue
+            candidate = extracted.get(param_name, "-1")
+            if candidate == "-1":
+                continue
+            stripped = self._strip_keyword_prefix_noise(candidate)
+            if stripped != candidate:
+                logger.info(
+                    "keyword prefix stripped: %r -> %r", candidate, stripped
+                )
+                extracted[param_name] = stripped
+
+        # keyword 候选值 → LLM 校验确认/纠正（全量校验，质量优先）
+        # 处理前缀清理覆盖不到的噪音：后续动作、标点、数量修饰等。
+        if self._llm_caller:
+            for param_name, param_def in skill.params.items():
+                if param_def.get("type") != "keyword":
+                    continue
+                candidate = extracted.get(param_name, "-1")
+                if candidate == "-1":
+                    continue
+                verified = self._verify_keyword_with_llm(skill, task, candidate)
+                if verified and verified != "-1":
+                    extracted[param_name] = verified
+
+        # 仍为 -1 的字段 → LLM 抽取兜底
         llm_values = self._extract_params_with_llm(skill, task, extracted)
         for param_name, value in llm_values.items():
             if extracted.get(param_name, "-1") == "-1" and value and value != "-1":
@@ -822,6 +944,82 @@ class SkillRouter:
             "    pass\n"
             f"ensure_auth({json.dumps(domain, ensure_ascii=False)}, __agentic_sign_url)\n"
         )
+
+    def _verify_keyword_with_llm(
+        self,
+        skill: SkillRouterInfo,
+        task: str,
+        candidate: str,
+    ) -> Optional[str]:
+        """用 LLM 校验/纠正关键词候选值。
+
+        rule/trigger_patterns 抽出的关键词可能带后续动作、助词、标点等噪音。
+        让 LLM 判定 candidate 是否为干净的搜索关键词：干净则原样确认，否则
+        返回从原任务中提炼的干净关键词。
+
+        Returns:
+            校验后的关键词；LLM 不可用或失败时返回 None（沿用 candidate）。
+        """
+        if not self._llm_caller:
+            logger.debug("LLM keyword verify skipped (no caller): candidate=%r", candidate)
+            return None
+
+        prompt = textwrap.dedent(
+            f"""\
+            你是一个关键词清洗器。判断给定的候选关键词是否为干净的搜索关键词。
+
+            用户原始指令: {task}
+            技能: {skill.name}
+            候选关键词: {candidate}
+
+            判定规则:
+            - 候选已是干净的关键词（无后续动作、无多余助词、无标点）→ 原样返回
+            - 候选带噪音 → 返回从原指令提炼的干净关键词。常见噪音:
+              · 前缀助词残留在候选开头：「一下/查查/帮我/麻烦/请/顺便」
+                例：候选「一下台风近况」→ 返回「台风近况」
+              · 后续动作：「然后/接着/并/看看/第一/截图/翻页/返回」
+                例：候选「python教程然后截图」→ 返回「python教程」
+              · 标点：逗号、句号、引号等
+              · 数量修饰：「五千字/八百字」
+            - 候选为 -1 或空 → 返回 -1
+            - 只输出最终的关键词，不要解释、不要引号、不要代码块
+            """
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string"},
+                "clean": {"type": "boolean"},
+            },
+            "required": ["keyword"],
+        }
+
+        try:
+            data = self._llm_caller.call_json(
+                prompt,
+                schema=schema,
+                system_prompt="你是关键词清洗器，只返回结构化结果。",
+                max_tokens=256,
+            )
+        except Exception as exc:
+            logger.warning("LLM keyword verify failed: %s", exc)
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        verified = str(data.get("keyword", "") or "").strip()
+        if not verified or verified.lower() in {"none", "null", "n/a"}:
+            return "-1"
+        if verified != candidate:
+            logger.info(
+                "LLM keyword verify corrected: %r -> %r (task=%r)",
+                candidate, verified, task,
+            )
+        else:
+            logger.debug("LLM keyword verify unchanged: %r", candidate)
+        return verified
 
     def _extract_params_with_llm(
         self,
