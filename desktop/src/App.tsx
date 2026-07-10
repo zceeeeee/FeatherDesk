@@ -3,12 +3,16 @@ import { ChatPanel } from "./components/ChatPanel";
 import { PetCircle } from "./components/PetCircle";
 import { DashboardPage } from "./pages/DashboardPage";
 import { useAgentStore } from "./stores/agentStore";
+import { useAppearanceStore } from "./stores/appearanceStore";
 
 export default function App() {
   const view = new URLSearchParams(window.location.search).get("view") || "pet";
   const initialize = useAgentStore((state) => state.initialize);
   const reconnect = useAgentStore((state) => state.reconnect);
   const addLog = useAgentStore((state) => state.addLog);
+  const initializeAppearance = useAppearanceStore((state) => state.initializeAppearance);
+  const disposeAppearance = useAppearanceStore((state) => state.disposeAppearance);
+  const skinId = useAppearanceStore((state) => state.skinId);
   const [expanded, setExpanded] = useState(view === "dashboard");
 
   useEffect(() => {
@@ -24,6 +28,15 @@ export default function App() {
       removeRestarted();
     };
   }, [addLog, initialize, reconnect, view]);
+
+  useEffect(() => {
+    void initializeAppearance();
+    return disposeAppearance;
+  }, [disposeAppearance, initializeAppearance]);
+
+  useEffect(() => {
+    document.documentElement.dataset.petSkin = skinId;
+  }, [skinId]);
 
   if (view === "dashboard") return <DashboardPage />;
   return expanded ? <ChatPanel /> : <PetCircle />;

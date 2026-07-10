@@ -10,6 +10,7 @@ import {
   LockKeyhole,
   MessageSquare,
   MonitorCog,
+  Palette,
   RefreshCw,
   Save,
   ScrollText,
@@ -19,12 +20,13 @@ import { apiRequest, desktopSettings } from "../services/api";
 import { useAgentStore } from "../stores/agentStore";
 import type { DesktopSettings } from "../types";
 import { ChatPanel } from "../components/ChatPanel";
+import { AppearanceSettings } from "../components/AppearanceSettings";
+import type { DashboardSection } from "../types";
 
-type Section = "chat" | "history" | "api" | "models" | "skills" | "browser" | "permissions" | "logs" | "about";
-
-const navigation: Array<{ id: Section; label: string; icon: typeof Bot }> = [
+const navigation: Array<{ id: DashboardSection; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "聊天", icon: MessageSquare },
   { id: "history", label: "历史任务", icon: History },
+  { id: "appearance", label: "外观与皮肤", icon: Palette },
   { id: "api", label: "API 配置", icon: KeyRound },
   { id: "models", label: "模型配置", icon: BrainCircuit },
   { id: "skills", label: "技能管理", icon: ListTree },
@@ -43,8 +45,14 @@ interface SkillInfo {
 }
 
 export function DashboardPage() {
-  const [section, setSection] = useState<Section>("chat");
+  const requestedSection = new URLSearchParams(window.location.search).get("section");
+  const initialSection = navigation.some((item) => item.id === requestedSection)
+    ? requestedSection as DashboardSection
+    : "chat";
+  const [section, setSection] = useState<DashboardSection>(initialSection);
   const state = useAgentStore();
+
+  useEffect(() => window.desktopAgent.onDashboardNavigate(setSection), []);
 
   return (
     <main className="dashboard-shell">
@@ -67,6 +75,7 @@ export function DashboardPage() {
       <section className="dashboard-content">
         {section === "chat" ? <ChatPanel dashboard /> : null}
         {section === "history" ? <HistoryView /> : null}
+        {section === "appearance" ? <AppearanceSettings /> : null}
         {section === "api" || section === "models" || section === "browser" ? <SettingsView initialSection={section} /> : null}
         {section === "skills" ? <SkillsView /> : null}
         {section === "permissions" ? <PermissionsView /> : null}

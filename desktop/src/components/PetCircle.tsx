@@ -1,16 +1,12 @@
 import { useRef } from "react";
+import { getAgentStateLabel } from "../skins/skinRegistry";
 import { useAgentStore } from "../stores/agentStore";
-
-const stateLabels = {
-  idle: "空闲",
-  running: "正在执行",
-  waiting_confirmation: "等待确认",
-  success: "已完成",
-  error: "执行失败"
-};
+import { useAppearanceStore } from "../stores/appearanceStore";
+import { PetAvatar } from "./PetAvatar";
 
 export function PetCircle() {
   const visualState = useAgentStore((state) => state.visualState);
+  const skinId = useAppearanceStore((state) => state.skinId);
   const pointer = useRef<{
     x: number;
     y: number;
@@ -52,19 +48,21 @@ export function PetCircle() {
 
   return (
     <button
-      className={`pet-circle state-${visualState}`}
-      aria-label={`桌面智能体，${stateLabels[visualState]}`}
-      title={stateLabels[visualState]}
+      className={`pet-circle skin-${skinId}`}
+      aria-label={`桌面智能体，${getAgentStateLabel(visualState)}`}
+      title={getAgentStateLabel(visualState)}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onClick={(event) => {
+        if (event.detail === 0) void window.desktopAgent.expandChat();
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         void window.desktopAgent.showPetMenu();
       }}
     >
-      <span className="pet-core" />
-      <span className="pet-ring" />
+      <PetAvatar skinId={skinId} state={visualState} variant="compact" />
     </button>
   );
 }

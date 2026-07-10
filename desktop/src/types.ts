@@ -5,6 +5,25 @@ export type AgentVisualState =
   | "success"
   | "error";
 
+export type PetSkinId = "classic" | "animated-cat";
+
+export type DashboardSection =
+  | "chat"
+  | "history"
+  | "appearance"
+  | "api"
+  | "models"
+  | "skills"
+  | "browser"
+  | "permissions"
+  | "logs"
+  | "about";
+
+export interface AppearancePreferences {
+  version: 1;
+  skinId: PetSkinId;
+}
+
 export type ChatMessageType =
   | "user"
   | "assistant"
@@ -94,7 +113,7 @@ export interface DesktopBridge {
   expandChat(): Promise<void>;
   collapseChat(): Promise<void>;
   isExpanded(): Promise<boolean>;
-  openDashboard(): Promise<void>;
+  openDashboard(section?: DashboardSection): Promise<void>;
   setPetPosition(x: number, y: number): Promise<void>;
   setWindowPosition(x: number, y: number): Promise<void>;
   getWindowBounds(): Promise<{ x: number; y: number; width: number; height: number }>;
@@ -103,10 +122,14 @@ export interface DesktopBridge {
   getBackendConfig(): Promise<{ port: number; token: string }>;
   getSettings(): Promise<DesktopSettings>;
   saveSettings(settings: DesktopSettings): Promise<{ ok: boolean; apiKeyMasked: string }>;
+  getAppearancePreferences(): Promise<AppearancePreferences>;
+  setSkin(skinId: PetSkinId): Promise<AppearancePreferences>;
   quitApp(): Promise<void>;
   onBackendLog(callback: (message: string) => void): () => void;
   onExpandedChange(callback: (expanded: boolean) => void): () => void;
   onBackendRestarted(callback: () => void): () => void;
+  onAppearanceChanged(callback: (preferences: AppearancePreferences) => void): () => void;
+  onDashboardNavigate(callback: (section: DashboardSection) => void): () => void;
 }
 
 declare global {

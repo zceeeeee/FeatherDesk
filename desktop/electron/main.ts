@@ -14,6 +14,14 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  getCompactShapeForSkin,
+  getDefaultAppearancePreferences,
+  readAppearancePreferences,
+  validateSkinId,
+  writeAppearancePreferences,
+  type AppearancePreferences
+} from "./appearance.js";
 
 const COMPACT_SIZE = 80;
 const EXPANDED_WIDTH = 400;
@@ -29,6 +37,7 @@ let expanded = false;
 let compactBounds = { x: 0, y: 0, width: COMPACT_SIZE, height: COMPACT_SIZE };
 let expandedAnchor = { right: true, bottom: true };
 let quitting = false;
+let appearancePreferences: AppearancePreferences = getDefaultAppearancePreferences();
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
@@ -86,9 +95,10 @@ function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle): void {
   writeJson(userFile("pet-position.json"), point);
 }
 
-function rendererUrl(view: "pet" | "dashboard"): string {
+function rendererUrl(view: "pet" | "dashboard", section?: string): string {
   const url = pathToFileURL(path.join(desktopRoot, "dist", "index.html"));
   url.searchParams.set("view", view);
+  if (section) url.searchParams.set("section", section);
   return url.toString();
 }
 
@@ -126,19 +136,8 @@ function createPetWindow(): void {
 
 function applyCompactShape(): void {
   if (!petWindow || expanded || typeof petWindow.setShape !== "function") return;
-  const rects: Electron.Rectangle[] = [];
-  for (let y = 0; y < COMPACT_SIZE; y += 4) {
-    const dy = y + 2 - COMPACT_SIZE / 2;
-    const half = Math.sqrt(Math.max(0, (COMPACT_SIZE / 2) ** 2 - dy ** 2));
-    rects.push({
-      x: Math.round(COMPACT_SIZE / 2 - half),
-      y,
-      width: Math.max(1, Math.round(half * 2)),
-      height: 4
-    });
-  }
   try {
-    petWindow.setShape(rects);
+    petWindow.setShape(getCompactShapeForSkin(appearancePreferences.skinId, COMPACT_SIZE));
   } catch {
     // setShape is not available on every platform/backend.
   }
@@ -170,18 +169,36 @@ function expandPet(): void {
 
 function collapsePet(): void {
   if (!petWindow || !expanded) return;
+  const targetWindow = petWindow;
   expanded = false;
+  targetWindow.webContents.send("pet:expanded", false);
   const point = clampCompactPosition(compactBounds.x, compactBounds.y);
   compactBounds = { ...point, width: COMPACT_SIZE, height: COMPACT_SIZE };
-  petWindow.setBounds(compactBounds, true);
+  targetWindow.setBounds(compactBounds, true);
   applyCompactShape();
-  petWindow.webContents.send("pet:expanded", false);
+  setTimeout(() => {
+    if (!expanded && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send("pet:expanded", false);
+      targetWindow.webContents.invalidate();
+    }
+  }, 100);
 }
 
-function createDashboardWindow(): BrowserWindow {
+function normalizeDashboardSection(value: unknown): string | undefined {
+  const allowed = new Set([
+    "chat", "history", "appearance", "api", "models", "skills",
+    "browser", "permissions", "logs", "about"
+  ]);
+  return typeof value === "string" && allowed.has(value) ? value : undefined;
+}
+
+function createDashboardWindow(section?: string): BrowserWindow {
+  const targetSection = normalizeDashboardSection(section);
+  if (expanded) collapsePet();
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
     dashboardWindow.show();
     dashboardWindow.focus();
+    if (targetSection) dashboardWindow.webContents.send("dashboard:navigate", targetSection);
     return dashboardWindow;
   }
   dashboardWindow = new BrowserWindow({
@@ -199,7 +216,7 @@ function createDashboardWindow(): BrowserWindow {
     }
   });
   dashboardWindow.setMenuBarVisibility(false);
-  dashboardWindow.loadURL(rendererUrl("dashboard"));
+  dashboardWindow.loadURL(rendererUrl("dashboard", targetSection));
   dashboardWindow.on("closed", () => {
     dashboardWindow = null;
   });
@@ -209,6 +226,14 @@ function createDashboardWindow(): BrowserWindow {
 function broadcastLog(message: string): void {
   for (const win of [petWindow, dashboardWindow]) {
     if (win && !win.isDestroyed()) win.webContents.send("backend:log", message);
+  }
+}
+
+function broadcastAppearanceChanged(preferences: AppearancePreferences): void {
+  for (const win of [petWindow, dashboardWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("appearance:changed", preferences);
+    }
   }
 }
 
@@ -332,7 +357,7 @@ function registerIpc(): void {
   ipcMain.handle("pet:collapse", () => collapsePet());
   ipcMain.handle("pet:is-expanded", () => expanded);
   ipcMain.handle("pet:show-menu", () => showPetMenu());
-  ipcMain.handle("dashboard:open", () => createDashboardWindow());
+  ipcMain.handle("dashboard:open", (_event, section: unknown) => createDashboardWindow(normalizeDashboardSection(section)));
   ipcMain.handle("window:get-bounds", (event) => BrowserWindow.fromWebContents(event.sender)?.getBounds());
   ipcMain.handle("window:set-position", (event, point: { x: number; y: number }) => {
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -390,6 +415,20 @@ function registerIpc(): void {
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };
   });
+  ipcMain.handle("appearance:get-preferences", () => appearancePreferences);
+  ipcMain.handle("appearance:set-skin", (_event, skinId: unknown) => {
+    const preferences: AppearancePreferences = {
+      version: 1,
+      skinId: validateSkinId(skinId)
+    };
+    appearancePreferences = writeAppearancePreferences(
+      userFile("ui-preferences.json"),
+      preferences
+    );
+    applyCompactShape();
+    broadcastAppearanceChanged(appearancePreferences);
+    return appearancePreferences;
+  });
   ipcMain.handle("app:quit", () => {
     quitting = true;
     app.quit();
@@ -406,6 +445,7 @@ app.on("before-quit", () => {
 });
 
 app.whenReady().then(async () => {
+  appearancePreferences = readAppearancePreferences(userFile("ui-preferences.json"));
   registerIpc();
   await startBackend();
   createPetWindow();
