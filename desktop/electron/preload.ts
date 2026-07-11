@@ -1,4 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type {
+  AppearancePreferences,
+  AppearanceUpdatePatch,
+  PetSkinId,
+  UpdateAppearanceOptions
+} from "./appearanceModel.js";
 
 contextBridge.exposeInMainWorld("desktopAgent", {
   expandChat: () => ipcRenderer.invoke("pet:expand"),
@@ -19,7 +25,15 @@ contextBridge.exposeInMainWorld("desktopAgent", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings: Record<string, unknown>) => ipcRenderer.invoke("settings:save", settings),
   getAppearancePreferences: () => ipcRenderer.invoke("appearance:get-preferences"),
-  setSkin: (skinId: string) => ipcRenderer.invoke("appearance:set-skin", skinId),
+  updateAppearancePreferences: (
+    patch: AppearanceUpdatePatch,
+    options?: UpdateAppearanceOptions
+  ) => ipcRenderer.invoke("appearance:update-preferences", patch, options),
+  setSkin: (skinId: PetSkinId) =>
+    ipcRenderer.invoke("appearance:update-preferences", { skinId }, {}),
+  deletePaletteHistory: (historyId: string) =>
+    ipcRenderer.invoke("appearance:delete-palette-history", historyId),
+  clearPaletteHistory: () => ipcRenderer.invoke("appearance:clear-palette-history"),
   quitApp: () => ipcRenderer.invoke("app:quit"),
   onBackendLog: (callback: (message: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, message: string) => callback(message);
@@ -36,10 +50,10 @@ contextBridge.exposeInMainWorld("desktopAgent", {
     ipcRenderer.on("backend:restarted", listener);
     return () => ipcRenderer.removeListener("backend:restarted", listener);
   },
-  onAppearanceChanged: (callback: (preferences: { version: 1; skinId: string }) => void) => {
+  onAppearanceChanged: (callback: (preferences: AppearancePreferences) => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
-      preferences: { version: 1; skinId: string }
+      preferences: AppearancePreferences
     ) => callback(preferences);
     ipcRenderer.on("appearance:changed", listener);
     return () => ipcRenderer.removeListener("appearance:changed", listener);

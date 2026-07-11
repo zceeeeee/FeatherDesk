@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  parseAppearancePreferences,
+  type AppearancePreferences,
+  type PetSkinId
+} from "./appearanceModel.js";
 
-export type PetSkinId = "classic" | "animated-cat" | "maltese";
-
-export interface AppearancePreferences {
-  version: 1;
-  skinId: PetSkinId;
-}
+export * from "./appearanceModel.js";
 
 export interface ShapeRectangle {
   x: number;
@@ -15,31 +15,11 @@ export interface ShapeRectangle {
   height: number;
 }
 
-const VALID_SKIN_IDS = new Set<PetSkinId>(["classic", "animated-cat", "maltese"]);
-
-export function validateSkinId(value: unknown): PetSkinId {
-  return typeof value === "string" && VALID_SKIN_IDS.has(value as PetSkinId)
-    ? value as PetSkinId
-    : "classic";
-}
-
-export function getDefaultAppearancePreferences(): AppearancePreferences {
-  return { version: 1, skinId: "classic" };
-}
-
-export function parseAppearancePreferences(value: unknown): AppearancePreferences {
-  if (!value || typeof value !== "object") return getDefaultAppearancePreferences();
-  return {
-    version: 1,
-    skinId: validateSkinId((value as { skinId?: unknown }).skinId)
-  };
-}
-
 export function readAppearancePreferences(file: string): AppearancePreferences {
   try {
     return parseAppearancePreferences(JSON.parse(fs.readFileSync(file, "utf8")));
   } catch {
-    return getDefaultAppearancePreferences();
+    return parseAppearancePreferences(null);
   }
 }
 

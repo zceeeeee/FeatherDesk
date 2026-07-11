@@ -5,7 +5,25 @@ export type AgentVisualState =
   | "success"
   | "error";
 
-export type PetSkinId = "classic" | "animated-cat" | "maltese";
+import type {
+  AppearancePreferences,
+  AppearanceUpdatePatch,
+  PaletteHistoryItem,
+  PetSkinId,
+  ThemePalette,
+  TypographyPreferences,
+  UpdateAppearanceOptions
+} from "../electron/appearanceModel.js";
+
+export type {
+  AppearancePreferences,
+  AppearanceUpdatePatch,
+  PaletteHistoryItem,
+  PetSkinId,
+  ThemePalette,
+  TypographyPreferences,
+  UpdateAppearanceOptions
+} from "../electron/appearanceModel.js";
 
 export type DashboardSection =
   | "chat"
@@ -18,11 +36,6 @@ export type DashboardSection =
   | "permissions"
   | "logs"
   | "about";
-
-export interface AppearancePreferences {
-  version: 1;
-  skinId: PetSkinId;
-}
 
 export type ChatMessageType =
   | "user"
@@ -128,7 +141,13 @@ export interface DesktopBridge {
   getSettings(): Promise<DesktopSettings>;
   saveSettings(settings: DesktopSettings): Promise<{ ok: boolean; apiKeyMasked: string }>;
   getAppearancePreferences(): Promise<AppearancePreferences>;
+  updateAppearancePreferences(
+    patch: AppearanceUpdatePatch,
+    options?: UpdateAppearanceOptions
+  ): Promise<AppearancePreferences>;
   setSkin(skinId: PetSkinId): Promise<AppearancePreferences>;
+  deletePaletteHistory(historyId: string): Promise<AppearancePreferences>;
+  clearPaletteHistory(): Promise<AppearancePreferences>;
   quitApp(): Promise<void>;
   onBackendLog(callback: (message: string) => void): () => void;
   onExpandedChange(callback: (expanded: boolean) => void): () => void;

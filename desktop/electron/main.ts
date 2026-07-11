@@ -17,10 +17,12 @@ import { pathToFileURL } from "node:url";
 import {
   getCompactShapeForSkin,
   getDefaultAppearancePreferences,
+  mergeAndValidateAppearancePreferences,
   readAppearancePreferences,
-  validateSkinId,
   writeAppearancePreferences,
-  type AppearancePreferences
+  type AppearancePreferences,
+  type AppearanceUpdatePatch,
+  type UpdateAppearanceOptions
 } from "./appearance.js";
 import {
   clampChatBounds,
@@ -30,6 +32,7 @@ import {
   type ResizeEdge,
   type WindowSize
 } from "./windowGeometry.js";
+import { applyAlwaysOnTopToWindow } from "./windowBehavior.js";
 
 const COMPACT_SIZE = 80;
 
@@ -108,6 +111,15 @@ function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle, persist = tru
   if (persist) writeJson(userFile("pet-position.json"), point);
 }
 
+function applyPetAlwaysOnTop(enabled: boolean, bringToFront = false): void {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  try {
+    applyAlwaysOnTopToWindow(petWindow, enabled, process.platform, bringToFront);
+  } catch (error) {
+    broadcastLog(`Unable to apply always-on-top preference: ${String(error)}`);
+  }
+}
+
 function clearExpandedMoveSettleTimer(): void {
   if (!expandedMoveSettleTimer) return;
   clearTimeout(expandedMoveSettleTimer);
@@ -160,7 +172,7 @@ function createPetWindow(): void {
     frame: false,
     transparent: true,
     resizable: false,
-    alwaysOnTop: true,
+    alwaysOnTop: appearancePreferences.alwaysOnTop,
     skipTaskbar: true,
     hasShadow: false,
     show: false,
@@ -172,9 +184,12 @@ function createPetWindow(): void {
       sandbox: true
     }
   });
-  petWindow.setAlwaysOnTop(true, "floating");
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
   petWindow.loadURL(rendererUrl("pet"));
-  petWindow.once("ready-to-show", () => petWindow?.show());
+  petWindow.once("ready-to-show", () => {
+    petWindow?.show();
+    applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
+  });
   petWindow.on("closed", () => {
     clearExpandedMoveSettleTimer();
     petWindow = null;
@@ -232,6 +247,7 @@ function expandPet(): void {
   const bounds = { x, y, width, height };
   applyExpandedShape(bounds);
   petWindow.setBounds(bounds, true);
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
   petWindow.webContents.send("pet:expanded", true);
 }
 
@@ -246,6 +262,7 @@ function collapsePet(): void {
   compactBounds = { ...point, width: COMPACT_SIZE, height: COMPACT_SIZE };
   targetWindow.setBounds(compactBounds, true);
   applyCompactShape();
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
   setTimeout(() => {
     if (!expanded && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send("pet:expanded", false);
@@ -305,6 +322,50 @@ function broadcastAppearanceChanged(preferences: AppearancePreferences): void {
       win.webContents.send("appearance:changed", preferences);
     }
   }
+}
+
+function updateAppearancePreferences(
+  patch: AppearanceUpdatePatch,
+  options: UpdateAppearanceOptions = {}
+): AppearancePreferences {
+  const previous = appearancePreferences;
+  const next = mergeAndValidateAppearancePreferences(previous, patch, options);
+  appearancePreferences = writeAppearancePreferences(userFile("ui-preferences.json"), next);
+
+  if (previous.alwaysOnTop !== appearancePreferences.alwaysOnTop) {
+    applyPetAlwaysOnTop(
+      appearancePreferences.alwaysOnTop,
+      appearancePreferences.alwaysOnTop
+    );
+  }
+  if (previous.skinId !== appearancePreferences.skinId) {
+    applyCompactShape();
+    applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
+  }
+  updateTrayMenu();
+  broadcastAppearanceChanged(appearancePreferences);
+  return appearancePreferences;
+}
+
+function deletePaletteHistory(historyId: unknown): AppearancePreferences {
+  if (typeof historyId !== "string" || !historyId.trim()) return appearancePreferences;
+  const next = {
+    ...appearancePreferences,
+    paletteHistory: appearancePreferences.paletteHistory.filter((item) => item.id !== historyId)
+  };
+  appearancePreferences = writeAppearancePreferences(userFile("ui-preferences.json"), next);
+  broadcastAppearanceChanged(appearancePreferences);
+  return appearancePreferences;
+}
+
+function clearPaletteHistory(): AppearancePreferences {
+  if (!appearancePreferences.paletteHistory.length) return appearancePreferences;
+  appearancePreferences = writeAppearancePreferences(userFile("ui-preferences.json"), {
+    ...appearancePreferences,
+    paletteHistory: []
+  });
+  broadcastAppearanceChanged(appearancePreferences);
+  return appearancePreferences;
 }
 
 function settingsForBackend(): NodeJS.ProcessEnv {
@@ -378,15 +439,31 @@ async function restartBackend(): Promise<void> {
   }
 }
 
-function createTray(): void {
-  const iconPath = path.join(desktopRoot, "assets", "tray-icon.svg");
-  const image = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
-  tray = new Tray(image);
-  tray.setToolTip("桌面智能体");
+function showPetWindow(): void {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  petWindow.show();
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
+  try {
+    petWindow.moveTop();
+  } catch {
+    // moveTop is unavailable on Wayland.
+  }
+  petWindow.focus();
+}
+
+function updateTrayMenu(): void {
+  if (!tray || tray.isDestroyed()) return;
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      { label: "显示桌面宠物", click: showPetWindow },
       { label: "展开聊天", click: expandPet },
       { label: "打开控制台", click: () => createDashboardWindow() },
+      {
+        label: "始终置顶",
+        type: "checkbox",
+        checked: appearancePreferences.alwaysOnTop,
+        click: (item) => updateAppearancePreferences({ alwaysOnTop: item.checked })
+      },
       { type: "separator" },
       { label: "重启 Agent", click: () => void restartBackend() },
       { label: "隐藏", click: () => petWindow?.hide() },
@@ -399,10 +476,15 @@ function createTray(): void {
       }
     ])
   );
-  tray.on("click", () => {
-    petWindow?.show();
-    petWindow?.focus();
-  });
+}
+
+function createTray(): void {
+  const iconPath = path.join(desktopRoot, "assets", "tray-icon.svg");
+  const image = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
+  tray = new Tray(image);
+  tray.setToolTip("桌面智能体");
+  updateTrayMenu();
+  tray.on("click", showPetWindow);
 }
 
 function showPetMenu(): void {
@@ -499,19 +581,15 @@ function registerIpc(): void {
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };
   });
   ipcMain.handle("appearance:get-preferences", () => appearancePreferences);
-  ipcMain.handle("appearance:set-skin", (_event, skinId: unknown) => {
-    const preferences: AppearancePreferences = {
-      version: 1,
-      skinId: validateSkinId(skinId)
-    };
-    appearancePreferences = writeAppearancePreferences(
-      userFile("ui-preferences.json"),
-      preferences
-    );
-    applyCompactShape();
-    broadcastAppearanceChanged(appearancePreferences);
-    return appearancePreferences;
-  });
+  ipcMain.handle(
+    "appearance:update-preferences",
+    (_event, patch: AppearanceUpdatePatch, options?: UpdateAppearanceOptions) =>
+      updateAppearancePreferences(patch, options)
+  );
+  ipcMain.handle("appearance:delete-palette-history", (_event, historyId: unknown) =>
+    deletePaletteHistory(historyId)
+  );
+  ipcMain.handle("appearance:clear-palette-history", () => clearPaletteHistory());
   ipcMain.handle("app:quit", () => {
     quitting = true;
     app.quit();
@@ -528,7 +606,11 @@ app.on("before-quit", () => {
 });
 
 app.whenReady().then(async () => {
-  appearancePreferences = readAppearancePreferences(userFile("ui-preferences.json"));
+  const appearanceFile = userFile("ui-preferences.json");
+  appearancePreferences = writeAppearancePreferences(
+    appearanceFile,
+    readAppearancePreferences(appearanceFile)
+  );
   registerIpc();
   await startBackend();
   createPetWindow();
