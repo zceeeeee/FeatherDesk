@@ -5,6 +5,38 @@ export type AgentVisualState =
   | "success"
   | "error";
 
+import type {
+  AppearancePreferences,
+  AppearanceUpdatePatch,
+  PaletteHistoryItem,
+  PetSkinId,
+  ThemePalette,
+  TypographyPreferences,
+  UpdateAppearanceOptions
+} from "../electron/appearanceModel.js";
+
+export type {
+  AppearancePreferences,
+  AppearanceUpdatePatch,
+  PaletteHistoryItem,
+  PetSkinId,
+  ThemePalette,
+  TypographyPreferences,
+  UpdateAppearanceOptions
+} from "../electron/appearanceModel.js";
+
+export type DashboardSection =
+  | "chat"
+  | "history"
+  | "appearance"
+  | "api"
+  | "models"
+  | "skills"
+  | "browser"
+  | "permissions"
+  | "logs"
+  | "about";
+
 export type ChatMessageType =
   | "user"
   | "assistant"
@@ -94,19 +126,34 @@ export interface DesktopBridge {
   expandChat(): Promise<void>;
   collapseChat(): Promise<void>;
   isExpanded(): Promise<boolean>;
-  openDashboard(): Promise<void>;
+  openDashboard(section?: DashboardSection): Promise<void>;
   setPetPosition(x: number, y: number): Promise<void>;
-  setWindowPosition(x: number, y: number): Promise<void>;
+  resizeExpandedChat(
+    edge: "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw",
+    deltaX: number,
+    deltaY: number,
+    persist?: boolean
+  ): Promise<{ x: number; y: number; width: number; height: number } | null>;
   getWindowBounds(): Promise<{ x: number; y: number; width: number; height: number }>;
   showPetMenu(): Promise<void>;
   restartBackend(): Promise<void>;
   getBackendConfig(): Promise<{ port: number; token: string }>;
   getSettings(): Promise<DesktopSettings>;
   saveSettings(settings: DesktopSettings): Promise<{ ok: boolean; apiKeyMasked: string }>;
+  getAppearancePreferences(): Promise<AppearancePreferences>;
+  updateAppearancePreferences(
+    patch: AppearanceUpdatePatch,
+    options?: UpdateAppearanceOptions
+  ): Promise<AppearancePreferences>;
+  setSkin(skinId: PetSkinId): Promise<AppearancePreferences>;
+  deletePaletteHistory(historyId: string): Promise<AppearancePreferences>;
+  clearPaletteHistory(): Promise<AppearancePreferences>;
   quitApp(): Promise<void>;
   onBackendLog(callback: (message: string) => void): () => void;
   onExpandedChange(callback: (expanded: boolean) => void): () => void;
   onBackendRestarted(callback: () => void): () => void;
+  onAppearanceChanged(callback: (preferences: AppearancePreferences) => void): () => void;
+  onDashboardNavigate(callback: (section: DashboardSection) => void): () => void;
 }
 
 declare global {

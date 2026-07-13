@@ -14,10 +14,27 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  getCompactShapeForSkin,
+  getDefaultAppearancePreferences,
+  mergeAndValidateAppearancePreferences,
+  readAppearancePreferences,
+  writeAppearancePreferences,
+  type AppearancePreferences,
+  type AppearanceUpdatePatch,
+  type UpdateAppearanceOptions
+} from "./appearance.js";
+import {
+  clampChatBounds,
+  DEFAULT_CHAT_SIZE,
+  parseChatSize,
+  resizeChatBoundsBy,
+  type ResizeEdge,
+  type WindowSize
+} from "./windowGeometry.js";
+import { applyAlwaysOnTopToWindow } from "./windowBehavior.js";
 
 const COMPACT_SIZE = 80;
-const EXPANDED_WIDTH = 400;
-const EXPANDED_HEIGHT = 600;
 
 let petWindow: BrowserWindow | null = null;
 let dashboardWindow: BrowserWindow | null = null;
@@ -27,8 +44,12 @@ let backendPort = 0;
 let backendToken = "";
 let expanded = false;
 let compactBounds = { x: 0, y: 0, width: COMPACT_SIZE, height: COMPACT_SIZE };
+let expandedSize: WindowSize = { ...DEFAULT_CHAT_SIZE };
 let expandedAnchor = { right: true, bottom: true };
 let quitting = false;
+let appearancePreferences: AppearancePreferences = getDefaultAppearancePreferences();
+let correctingExpandedPosition = false;
+let expandedMoveSettleTimer: NodeJS.Timeout | null = null;
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
@@ -74,7 +95,11 @@ function initialCompactBounds(): typeof compactBounds {
   };
 }
 
-function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle): void {
+function initialExpandedSize(): WindowSize {
+  return parseChatSize(readJson(userFile("chat-window-size.json"), DEFAULT_CHAT_SIZE));
+}
+
+function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle, persist = true): void {
   const anchorX = expandedAnchor.right
     ? bounds.x + bounds.width - COMPACT_SIZE
     : bounds.x;
@@ -83,23 +108,71 @@ function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle): void {
     : bounds.y;
   const point = clampCompactPosition(anchorX, anchorY);
   compactBounds = { ...point, width: COMPACT_SIZE, height: COMPACT_SIZE };
-  writeJson(userFile("pet-position.json"), point);
+  if (persist) writeJson(userFile("pet-position.json"), point);
 }
 
-function rendererUrl(view: "pet" | "dashboard"): string {
+function applyPetAlwaysOnTop(enabled: boolean, bringToFront = false): void {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  try {
+    applyAlwaysOnTopToWindow(petWindow, enabled, process.platform, bringToFront);
+  } catch (error) {
+    broadcastLog(`Unable to apply always-on-top preference: ${String(error)}`);
+  }
+}
+
+function clearExpandedMoveSettleTimer(): void {
+  if (!expandedMoveSettleTimer) return;
+  clearTimeout(expandedMoveSettleTimer);
+  expandedMoveSettleTimer = null;
+}
+
+function settleExpandedWindowPosition(): void {
+  clearExpandedMoveSettleTimer();
+  if (!petWindow || petWindow.isDestroyed() || !expanded || correctingExpandedPosition) return;
+
+  const currentBounds = petWindow.getBounds();
+  const display = screen.getDisplayMatching(currentBounds);
+  const nextBounds = clampChatBounds(currentBounds, display.workArea);
+  const changed =
+    nextBounds.x !== currentBounds.x ||
+    nextBounds.y !== currentBounds.y ||
+    nextBounds.width !== currentBounds.width ||
+    nextBounds.height !== currentBounds.height;
+
+  if (changed) {
+    correctingExpandedPosition = true;
+    try {
+      petWindow.setBounds(nextBounds, false);
+      applyExpandedShape(nextBounds);
+    } finally {
+      correctingExpandedPosition = false;
+    }
+  }
+  syncCompactAnchorFromExpanded(changed ? nextBounds : currentBounds);
+}
+
+function scheduleExpandedWindowSettle(): void {
+  if (!expanded || correctingExpandedPosition) return;
+  clearExpandedMoveSettleTimer();
+  expandedMoveSettleTimer = setTimeout(settleExpandedWindowPosition, 120);
+}
+
+function rendererUrl(view: "pet" | "dashboard", section?: string): string {
   const url = pathToFileURL(path.join(desktopRoot, "dist", "index.html"));
   url.searchParams.set("view", view);
+  if (section) url.searchParams.set("section", section);
   return url.toString();
 }
 
 function createPetWindow(): void {
   compactBounds = initialCompactBounds();
+  expandedSize = initialExpandedSize();
   petWindow = new BrowserWindow({
     ...compactBounds,
     frame: false,
     transparent: true,
     resizable: false,
-    alwaysOnTop: true,
+    alwaysOnTop: appearancePreferences.alwaysOnTop,
     skipTaskbar: true,
     hasShadow: false,
     show: false,
@@ -111,37 +184,46 @@ function createPetWindow(): void {
       sandbox: true
     }
   });
-  petWindow.setAlwaysOnTop(true, "floating");
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
   petWindow.loadURL(rendererUrl("pet"));
-  petWindow.once("ready-to-show", () => petWindow?.show());
+  petWindow.once("ready-to-show", () => {
+    petWindow?.show();
+    applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
+  });
   petWindow.on("closed", () => {
+    clearExpandedMoveSettleTimer();
     petWindow = null;
   });
+  petWindow.on("move", scheduleExpandedWindowSettle);
   petWindow.on("moved", () => {
-    if (!petWindow || !expanded) return;
-    syncCompactAnchorFromExpanded(petWindow.getBounds());
+    if (!expanded) return;
+    settleExpandedWindowPosition();
   });
   applyCompactShape();
 }
 
 function applyCompactShape(): void {
   if (!petWindow || expanded || typeof petWindow.setShape !== "function") return;
-  const rects: Electron.Rectangle[] = [];
-  for (let y = 0; y < COMPACT_SIZE; y += 4) {
-    const dy = y + 2 - COMPACT_SIZE / 2;
-    const half = Math.sqrt(Math.max(0, (COMPACT_SIZE / 2) ** 2 - dy ** 2));
-    rects.push({
-      x: Math.round(COMPACT_SIZE / 2 - half),
-      y,
-      width: Math.max(1, Math.round(half * 2)),
-      height: 4
-    });
-  }
   try {
-    petWindow.setShape(rects);
+    petWindow.setShape(getCompactShapeForSkin(appearancePreferences.skinId, COMPACT_SIZE));
   } catch {
     // setShape is not available on every platform/backend.
   }
+}
+
+function applyExpandedShape(bounds: Pick<Electron.Rectangle, "width" | "height">): void {
+  if (!petWindow || !expanded || typeof petWindow.setShape !== "function") return;
+  try {
+    petWindow.setShape([{ x: 0, y: 0, width: bounds.width, height: bounds.height }]);
+  } catch {
+    // Ignore unsupported shape updates.
+  }
+}
+
+function persistExpandedBounds(bounds: Electron.Rectangle): void {
+  expandedSize = { width: bounds.width, height: bounds.height };
+  writeJson(userFile("chat-window-size.json"), expandedSize);
+  syncCompactAnchorFromExpanded(bounds);
 }
 
 function expandPet(): void {
@@ -152,36 +234,58 @@ function expandPet(): void {
   const rightAnchored = compactBounds.x + COMPACT_SIZE / 2 > area.x + area.width / 2;
   const bottomAnchored = compactBounds.y + COMPACT_SIZE / 2 > area.y + area.height / 2;
   expandedAnchor = { right: rightAnchored, bottom: bottomAnchored };
+  const size = parseChatSize(expandedSize);
+  const width = Math.min(size.width, area.width);
+  const height = Math.min(size.height, area.height);
   const x = rightAnchored
-    ? Math.max(area.x, compactBounds.x + COMPACT_SIZE - EXPANDED_WIDTH)
-    : Math.min(compactBounds.x, area.x + area.width - EXPANDED_WIDTH);
+    ? Math.max(area.x, compactBounds.x + COMPACT_SIZE - width)
+    : Math.min(compactBounds.x, area.x + area.width - width);
   const y = bottomAnchored
-    ? Math.max(area.y, compactBounds.y + COMPACT_SIZE - EXPANDED_HEIGHT)
-    : Math.min(compactBounds.y, area.y + area.height - EXPANDED_HEIGHT);
+    ? Math.max(area.y, compactBounds.y + COMPACT_SIZE - height)
+    : Math.min(compactBounds.y, area.y + area.height - height);
   expanded = true;
-  try {
-    petWindow.setShape([{ x: 0, y: 0, width: EXPANDED_WIDTH, height: EXPANDED_HEIGHT }]);
-  } catch {
-    // Ignore unsupported shape reset.
-  }
-  petWindow.setBounds({ x, y, width: EXPANDED_WIDTH, height: EXPANDED_HEIGHT }, true);
+  const bounds = { x, y, width, height };
+  applyExpandedShape(bounds);
+  petWindow.setBounds(bounds, true);
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
   petWindow.webContents.send("pet:expanded", true);
 }
 
 function collapsePet(): void {
   if (!petWindow || !expanded) return;
+  clearExpandedMoveSettleTimer();
+  const targetWindow = petWindow;
+  persistExpandedBounds(targetWindow.getBounds());
   expanded = false;
+  targetWindow.webContents.send("pet:expanded", false);
   const point = clampCompactPosition(compactBounds.x, compactBounds.y);
   compactBounds = { ...point, width: COMPACT_SIZE, height: COMPACT_SIZE };
-  petWindow.setBounds(compactBounds, true);
+  targetWindow.setBounds(compactBounds, true);
   applyCompactShape();
-  petWindow.webContents.send("pet:expanded", false);
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
+  setTimeout(() => {
+    if (!expanded && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send("pet:expanded", false);
+      targetWindow.webContents.invalidate();
+    }
+  }, 100);
 }
 
-function createDashboardWindow(): BrowserWindow {
+function normalizeDashboardSection(value: unknown): string | undefined {
+  const allowed = new Set([
+    "chat", "history", "appearance", "api", "models", "skills",
+    "browser", "permissions", "logs", "about"
+  ]);
+  return typeof value === "string" && allowed.has(value) ? value : undefined;
+}
+
+function createDashboardWindow(section?: string): BrowserWindow {
+  const targetSection = normalizeDashboardSection(section);
+  if (expanded) collapsePet();
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
     dashboardWindow.show();
     dashboardWindow.focus();
+    if (targetSection) dashboardWindow.webContents.send("dashboard:navigate", targetSection);
     return dashboardWindow;
   }
   dashboardWindow = new BrowserWindow({
@@ -199,7 +303,7 @@ function createDashboardWindow(): BrowserWindow {
     }
   });
   dashboardWindow.setMenuBarVisibility(false);
-  dashboardWindow.loadURL(rendererUrl("dashboard"));
+  dashboardWindow.loadURL(rendererUrl("dashboard", targetSection));
   dashboardWindow.on("closed", () => {
     dashboardWindow = null;
   });
@@ -210,6 +314,58 @@ function broadcastLog(message: string): void {
   for (const win of [petWindow, dashboardWindow]) {
     if (win && !win.isDestroyed()) win.webContents.send("backend:log", message);
   }
+}
+
+function broadcastAppearanceChanged(preferences: AppearancePreferences): void {
+  for (const win of [petWindow, dashboardWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("appearance:changed", preferences);
+    }
+  }
+}
+
+function updateAppearancePreferences(
+  patch: AppearanceUpdatePatch,
+  options: UpdateAppearanceOptions = {}
+): AppearancePreferences {
+  const previous = appearancePreferences;
+  const next = mergeAndValidateAppearancePreferences(previous, patch, options);
+  appearancePreferences = writeAppearancePreferences(userFile("ui-preferences.json"), next);
+
+  if (previous.alwaysOnTop !== appearancePreferences.alwaysOnTop) {
+    applyPetAlwaysOnTop(
+      appearancePreferences.alwaysOnTop,
+      appearancePreferences.alwaysOnTop
+    );
+  }
+  if (previous.skinId !== appearancePreferences.skinId) {
+    applyCompactShape();
+    applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
+  }
+  updateTrayMenu();
+  broadcastAppearanceChanged(appearancePreferences);
+  return appearancePreferences;
+}
+
+function deletePaletteHistory(historyId: unknown): AppearancePreferences {
+  if (typeof historyId !== "string" || !historyId.trim()) return appearancePreferences;
+  const next = {
+    ...appearancePreferences,
+    paletteHistory: appearancePreferences.paletteHistory.filter((item) => item.id !== historyId)
+  };
+  appearancePreferences = writeAppearancePreferences(userFile("ui-preferences.json"), next);
+  broadcastAppearanceChanged(appearancePreferences);
+  return appearancePreferences;
+}
+
+function clearPaletteHistory(): AppearancePreferences {
+  if (!appearancePreferences.paletteHistory.length) return appearancePreferences;
+  appearancePreferences = writeAppearancePreferences(userFile("ui-preferences.json"), {
+    ...appearancePreferences,
+    paletteHistory: []
+  });
+  broadcastAppearanceChanged(appearancePreferences);
+  return appearancePreferences;
 }
 
 function settingsForBackend(): NodeJS.ProcessEnv {
@@ -283,15 +439,31 @@ async function restartBackend(): Promise<void> {
   }
 }
 
-function createTray(): void {
-  const iconPath = path.join(desktopRoot, "assets", "tray-icon.svg");
-  const image = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
-  tray = new Tray(image);
-  tray.setToolTip("桌面智能体");
+function showPetWindow(): void {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  petWindow.show();
+  applyPetAlwaysOnTop(appearancePreferences.alwaysOnTop);
+  try {
+    petWindow.moveTop();
+  } catch {
+    // moveTop is unavailable on Wayland.
+  }
+  petWindow.focus();
+}
+
+function updateTrayMenu(): void {
+  if (!tray || tray.isDestroyed()) return;
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      { label: "显示桌面宠物", click: showPetWindow },
       { label: "展开聊天", click: expandPet },
       { label: "打开控制台", click: () => createDashboardWindow() },
+      {
+        label: "始终置顶",
+        type: "checkbox",
+        checked: appearancePreferences.alwaysOnTop,
+        click: (item) => updateAppearancePreferences({ alwaysOnTop: item.checked })
+      },
       { type: "separator" },
       { label: "重启 Agent", click: () => void restartBackend() },
       { label: "隐藏", click: () => petWindow?.hide() },
@@ -304,10 +476,15 @@ function createTray(): void {
       }
     ])
   );
-  tray.on("click", () => {
-    petWindow?.show();
-    petWindow?.focus();
-  });
+}
+
+function createTray(): void {
+  const iconPath = path.join(desktopRoot, "assets", "tray-icon.svg");
+  const image = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
+  tray = new Tray(image);
+  tray.setToolTip("桌面智能体");
+  updateTrayMenu();
+  tray.on("click", showPetWindow);
 }
 
 function showPetMenu(): void {
@@ -332,25 +509,38 @@ function registerIpc(): void {
   ipcMain.handle("pet:collapse", () => collapsePet());
   ipcMain.handle("pet:is-expanded", () => expanded);
   ipcMain.handle("pet:show-menu", () => showPetMenu());
-  ipcMain.handle("dashboard:open", () => createDashboardWindow());
+  ipcMain.handle("dashboard:open", (_event, section: unknown) => createDashboardWindow(normalizeDashboardSection(section)));
   ipcMain.handle("window:get-bounds", (event) => BrowserWindow.fromWebContents(event.sender)?.getBounds());
-  ipcMain.handle("window:set-position", (event, point: { x: number; y: number }) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return null;
-    const bounds = window.getBounds();
-    const display = screen.getDisplayNearestPoint({
-      x: Math.round(point.x + bounds.width / 2),
-      y: Math.round(point.y + bounds.height / 2)
-    });
-    const area = display.workArea;
-    const x = Math.min(Math.max(Math.round(point.x), area.x), area.x + area.width - bounds.width);
-    const y = Math.min(Math.max(Math.round(point.y), area.y), area.y + area.height - bounds.height);
-    window.setPosition(x, y);
-    if (window === petWindow && expanded) {
-      syncCompactAnchorFromExpanded(window.getBounds());
+  ipcMain.handle(
+    "pet:resize-expanded",
+    (
+      event,
+      request: { edge?: unknown; deltaX?: unknown; deltaY?: unknown },
+      persist = false
+    ) => {
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!petWindow || sourceWindow !== petWindow || !expanded) {
+        return sourceWindow?.getBounds() ?? null;
+      }
+      const currentBounds = petWindow.getBounds();
+      const area = screen.getDisplayMatching(currentBounds).workArea;
+      const validEdges = new Set<ResizeEdge>(["n", "ne", "e", "se", "s", "sw", "w", "nw"]);
+      const edge = typeof request?.edge === "string" && validEdges.has(request.edge as ResizeEdge)
+        ? request.edge as ResizeEdge
+        : null;
+      if (!edge) return currentBounds;
+      const deltaX = typeof request.deltaX === "number" ? request.deltaX : 0;
+      const deltaY = typeof request.deltaY === "number" ? request.deltaY : 0;
+      const nextBounds = resizeChatBoundsBy(currentBounds, edge, deltaX, deltaY, area);
+      petWindow.setBounds(nextBounds);
+      applyExpandedShape(nextBounds);
+      expandedSize = { width: nextBounds.width, height: nextBounds.height };
+      syncCompactAnchorFromExpanded(nextBounds, persist);
+      if (persist) writeJson(userFile("chat-window-size.json"), expandedSize);
+      petWindow.webContents.invalidate();
+      return nextBounds;
     }
-    return window.getBounds();
-  });
+  );
   ipcMain.handle("pet:set-position", (_event, point: { x: number; y: number }) => {
     if (!petWindow || expanded) return compactBounds;
     const next = clampCompactPosition(point.x, point.y);
@@ -390,6 +580,16 @@ function registerIpc(): void {
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };
   });
+  ipcMain.handle("appearance:get-preferences", () => appearancePreferences);
+  ipcMain.handle(
+    "appearance:update-preferences",
+    (_event, patch: AppearanceUpdatePatch, options?: UpdateAppearanceOptions) =>
+      updateAppearancePreferences(patch, options)
+  );
+  ipcMain.handle("appearance:delete-palette-history", (_event, historyId: unknown) =>
+    deletePaletteHistory(historyId)
+  );
+  ipcMain.handle("appearance:clear-palette-history", () => clearPaletteHistory());
   ipcMain.handle("app:quit", () => {
     quitting = true;
     app.quit();
@@ -406,6 +606,11 @@ app.on("before-quit", () => {
 });
 
 app.whenReady().then(async () => {
+  const appearanceFile = userFile("ui-preferences.json");
+  appearancePreferences = writeAppearancePreferences(
+    appearanceFile,
+    readAppearancePreferences(appearanceFile)
+  );
   registerIpc();
   await startBackend();
   createPetWindow();
