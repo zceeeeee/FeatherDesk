@@ -1952,10 +1952,42 @@ class AgentLoop:
 
     def _do_explore_act(self, step: AgentStep) -> AgentState:
         """Execute Explore actions."""
-        state = self._ensure_explore_agent().execute(
+        explore_agent = self._ensure_explore_agent()
+        state = explore_agent.execute(
             step,
             executor=self._ensure_explore_executor(),
         )
+        # ── stuck 处理：通过面板询问用户下一步 ──
+        if state == "stuck":
+            logger.warning("Explore: 操作卡住，询问用户下一步")
+            broken = explore_agent._get_top_circuit_breaker()
+            history_summary = explore_agent._build_history_prompt()
+            question = (
+                f"Explore 模式遇到了困难："
+                f"{'【' + broken + ' 类操作连续失败】' if broken else '页面状态未变化'}\n\n"
+                f"{history_summary}\n\n"
+                f"请选择下一步操作：\n"
+                f"[继续尝试] 重新拍快照再试一次\n"
+                f"[手动操作] 我来手动完成，然后继续\n"
+                f"[放弃任务] 结束本次任务"
+            )
+            answer = explore_agent.ask_user_for_help(question)
+            answer = (answer or "").strip()
+            if "放弃" in answer:
+                step.result = "用户选择放弃任务"
+                return AgentState.FAILED
+            if "手动" in answer:
+                # 用户手动操作后，重置循环检测状态，重新进入 Explore
+                explore_agent._consecutive_same_page = 0
+                explore_agent._last_page_signature = None
+                explore_agent._circuit_breakers.clear()
+                step.result = "用户手动操作后继续 Explore"
+                return AgentState.EXPLORE
+            # 默认：继续尝试（重置循环计数，给一次机会）
+            explore_agent._consecutive_same_page = 0
+            explore_agent._last_page_signature = None
+            step.result = "用户选择继续尝试"
+            return AgentState.EXPLORE
         return AgentState(state)
 
     def _try_heal(self, step: AgentStep) -> AgentState:

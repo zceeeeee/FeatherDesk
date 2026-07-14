@@ -19,6 +19,7 @@ from src.core.explore.experience import ExperienceManager as ExploreExperienceMa
 from src.core.explore.models import (
     Action,
     ActionBatch,
+    ActionRecord,
     ElementInfo,
     ExploreConfig,
     ExploreExperience,
@@ -85,6 +86,14 @@ class ExploreAgent:
         self._entry_bootstrap_attempted: set[str] = set()
         self.just_navigated_to_entry = False
         self.explore_mode_active = False  # 整个任务生命周期内标记 Explore 模式
+
+        # ── 失败记忆与循环检测 ──
+        self._action_history: list[ActionRecord] = []  # 最近 N 步操作记录
+        self._max_history: int = 10  # 历史上限
+        self._consecutive_same_page: int = 0  # 连续相同页面计数
+        self._last_page_signature: str | None = None  # 上一次页面签名
+        self._circuit_breakers: dict[str, int] = {}  # 动作类型 → 连续失败次数
+        self._blocker_threshold: int = 3  # 连续失败 N 次触发 blocker
 
     def _get_browser_manager(self):
         return self._browser_manager_getter()
@@ -156,6 +165,63 @@ class ExploreAgent:
         self._entry_bootstrap_attempted = set()
         self.just_navigated_to_entry = False
         self.explore_mode_active = False
+        self._action_history = []
+        self._consecutive_same_page = 0
+        self._last_page_signature = None
+        self._circuit_breakers = {}
+
+    # ── 失败记忆与循环检测 ──────────────────────────────────────
+
+    def record_action(self, record: ActionRecord) -> None:
+        """追加一条操作记录，维护上限。"""
+        self._action_history.append(record)
+        if len(self._action_history) > self._max_history:
+            self._action_history = self._action_history[-self._max_history:]
+
+    def _build_history_prompt(self) -> str:
+        """将最近操作记录格式化为 prompt 片段。"""
+        if not self._action_history:
+            return ""
+        lines = ["最近操作历史（从旧到新）:"]
+        for r in self._action_history[-6:]:  # 最多展示最近 6 步
+            status = "成功" if r.success else f"失败: {r.error}"
+            ref_info = f" ref={r.ref}" if r.ref else ""
+            val_info = f" value={r.value}" if r.value else ""
+            lines.append(f"  - {r.action}{ref_info}{val_info} → {status}")
+        return "\n".join(lines)
+
+    def _compute_page_signature(self, snapshot) -> str:
+        """计算页面签名：url + 快照交互元素的 ref 序列。"""
+        refs = sorted(
+            n.ref for n in self._iter_snapshot_nodes(snapshot.nodes) if n.ref
+        )
+        return f"{snapshot.url}|{','.join(refs)}"
+
+    def _check_loop_detection(self, snapshot) -> bool:
+        """检测是否卡在相同页面。返回 True 表示检测到循环。"""
+        sig = self._compute_page_signature(snapshot)
+        if sig == self._last_page_signature:
+            self._consecutive_same_page += 1
+        else:
+            self._consecutive_same_page = 0
+        self._last_page_signature = sig
+        return self._consecutive_same_page >= 2
+
+    def _check_circuit_breaker(self, action_type: str, success: bool) -> bool:
+        """更新某动作类型的连续失败计数。返回 True 表示触发熔断。"""
+        if success:
+            self._circuit_breakers.pop(action_type, None)
+            return False
+        count = self._circuit_breakers.get(action_type, 0) + 1
+        self._circuit_breakers[action_type] = count
+        return count >= self._blocker_threshold
+
+    def _get_top_circuit_breaker(self) -> str | None:
+        """返回连续失败最多的动作类型（如果超过阈值）。"""
+        for action_type, count in self._circuit_breakers.items():
+            if count >= self._blocker_threshold:
+                return action_type
+        return None
 
     def should_skip_generated_script(self, task: str, script: str) -> bool:
         if not self.should_resolve_entry_with_llm(task):
@@ -396,6 +462,36 @@ class ExploreAgent:
             "20. 当任务完成时（例如：已经找到并操作了目标元素，或者已经获取到所需信息），"
             "使用 complete 动作结束任务。complete 的 value 可以填写任务完成的摘要。\n"
             "21. complete 应作为本批次最后一步。\n"
+            "22. 如果页面显示登录表单、验证码、人机验证等需要人工介入的内容，"
+            "且从操作历史中可以看到已经尝试过类似操作但失败了，"
+            "必须使用 pause_for_input 暂停并告知用户，不要重复尝试。\n"
+        )
+
+        # ── 注入操作历史 ──
+        history_prompt = self._build_history_prompt()
+        if history_prompt:
+            prompt += f"\n{history_prompt}\n"
+
+        # ── 循环检测警告 ──
+        if self._check_loop_detection(snapshot):
+            prompt += (
+                "\n⚠️ 循环检测：当前页面与上一轮完全相同，说明之前的操作没有产生效果。"
+                "请换一种策略，不要重复之前的操作。\n"
+            )
+
+        # ── 熔断警告 ──
+        broken = self._get_top_circuit_breaker()
+        if broken:
+            count = self._circuit_breakers[broken]
+            prompt += (
+                f"\n🚨 熔断警告：{broken} 类操作已连续失败 {count} 次。"
+                f"不要再尝试 {broken} 操作。如果是登录/验证码等需要人工介入的场景，"
+                f"请使用 pause_for_input 告知用户并等待用户手动操作。\n"
+            )
+
+        # ── 示例 ──
+        prompt += (
+            '\n输出格式示例:\n'
             '{"actions": ['
             '{"action": "fill", "ref": "e12", "value": "台风", "snapshot_v": "v1"}, '
             '{"action": "keyboard", "value": "Enter", "condition": "networkidle"}'
@@ -471,6 +567,19 @@ class ExploreAgent:
 
         active_executor = executor or self.ensure_executor()
         result = active_executor.execute(ActionBatch(actions=step.actions))
+
+        # ── 记录操作历史 ──
+        step_num = getattr(step, "step_number", 0)
+        for action_result in result.results:
+            self.record_action(ActionRecord(
+                action=str(action_result.action),
+                ref=action_result.ref,
+                value=action_result.value,
+                success=action_result.success,
+                error=action_result.error,
+                step_number=step_num,
+            ))
+
         if result.success:
             step.success = True
             step.result = f"Explore 执行成功: {result.status}"
@@ -489,18 +598,46 @@ class ExploreAgent:
         step.success = False
         step.error = result.error or "Explore 执行失败"
         step.result = f"Explore 执行失败: {step.error[:100]}"
+
+        # ── 更新 circuit breaker ──
+        for action in step.actions:
+            action_type = str(action.action)
+            self._check_circuit_breaker(action_type, success=False)
+
+        # ── 保存失败经验（降级已有经验） ──
+        self.save_experience(step, success=False)
+
+        # ── 循环/熔断检测 → 返回 stuck ──
+        if self._current_snapshot and self._check_loop_detection(self._current_snapshot):
+            logger.warning("Explore: 检测到页面循环，操作无效")
+            return "stuck"
+        if self._get_top_circuit_breaker():
+            broken = self._get_top_circuit_breaker()
+            logger.warning("Explore: %s 类操作触发熔断", broken)
+            return "stuck"
+
         return "failed"
 
-    def save_experience(self, step: Any) -> None:
+    def save_experience(self, step: Any, success: bool = True) -> None:
         if not self._experience_mgr or not step.actions:
-            return
-        if len(step.actions) < self._config.experience_save_threshold:
             return
 
         page = self._get_browser_manager().get_page()
         current_url = str(getattr(page, "url", "") or "")
         site = self.extract_site(current_url)
         if not site or self._current_snapshot is None:
+            return
+
+        # ── 失败经验：降级已有相似经验 ──
+        if not success:
+            task = step.task or step.action or "explore task"
+            similar = self._experience_mgr.find_similar(task, site)
+            if similar:
+                self._experience_mgr.update_confidence(similar.id, success=False)
+                logger.info("Explore: 降级已有经验 %s (confidence=%.2f)", similar.id, similar.confidence)
+            return
+
+        if len(step.actions) < self._config.experience_save_threshold:
             return
 
         selector_map = self.ensure_executor().get_ref_locator_mapping()
@@ -552,6 +689,24 @@ class ExploreAgent:
             snapshot_names=[node.name for node in self._iter_snapshot_nodes(self._current_snapshot.nodes) if node.name],
         )
         self._experience_mgr.save(experience)
+
+    def ask_user_for_help(self, question: str) -> str | None:
+        """直接暂停询问用户，不触发历史记录/循环检测等副作用。
+
+        返回用户的回答文本，如果用户取消则返回 None。
+        """
+        from src.core.explore.models import Action as ExploreAction, ActionType
+
+        executor = self.ensure_executor()
+        action = ExploreAction(action=ActionType.PAUSE_FOR_INPUT, value=question)
+        try:
+            answer = executor._pause_for_input(action)
+            if answer:
+                self._last_panel_answer = answer
+                return answer
+        except Exception as exc:
+            logger.warning("Explore: pause_for_input 失败: %s", exc)
+        return None
 
     def ensure_executor(self) -> ExploreExecutor:
         bm = self._get_browser_manager()

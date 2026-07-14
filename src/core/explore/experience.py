@@ -27,12 +27,9 @@ class ExperienceManager:
 
         existing = self.find_similar(experience.task, experience.site)
         if existing:
-            existing.success_count += 1
-            existing.confidence = min(0.95, existing.confidence + 0.05)
-            existing.last_used = datetime.now()
-            self._experiences[existing.id] = existing
-            self._save_to_disk(existing)
-            return existing
+            # 使用 update_confidence 统一更新，确保成功/失败都能正确处理
+            self.update_confidence(existing.id, success=True)
+            return self._experiences[existing.id]
 
         if not experience.action_count:
             experience.action_count = len(experience.actions)

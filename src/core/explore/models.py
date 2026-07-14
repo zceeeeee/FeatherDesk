@@ -157,6 +157,18 @@ class ActionResult(BaseModel):
     duration_ms: int = 0
 
 
+class ActionRecord(BaseModel):
+    """轻量级操作记录，用于注入 LLM prompt 避免重复失败。"""
+
+    action: str = Field(..., description="动作类型")
+    ref: Optional[str] = Field(None, description="元素 ref")
+    value: Optional[str] = Field(None, description="填充值或按键")
+    url: Optional[str] = Field(None, description="导航 URL")
+    success: bool = Field(..., description="是否成功")
+    error: Optional[str] = Field(None, description="失败原因")
+    step_number: int = Field(0, description="所在步骤编号")
+
+
 class ExecutionResult(BaseModel):
     """Action batch execution result."""
 
