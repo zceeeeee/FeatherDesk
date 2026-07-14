@@ -506,6 +506,11 @@ class WxCliClient:
             process = subprocess.Popen(
                 full_command,
                 cwd=self.repository_root,
+                env={
+                    **os.environ,
+                    "PYTHONUTF8": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                },
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -830,7 +835,7 @@ def query_with_chat(query: WxHistoryQuery, chat_name: str) -> WxHistoryQuery:
 
 
 def _parse_integer(value: Any, *, default: int, code: str) -> int:
-    if value is None or str(value).strip() in {"", "-1", "None", "none"}:
+    if value is None or str(value).strip() in {"", "None", "none"}:
         return default
     try:
         return int(str(value).strip())
