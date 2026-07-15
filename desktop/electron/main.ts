@@ -35,6 +35,7 @@ import {
 } from "./windowGeometry.js";
 import { applyAlwaysOnTopToWindow } from "./windowBehavior.js";
 import { forwardUtf8Logs, withUtf8PythonEnvironment } from "./backendLogging.js";
+import { APP_DASHBOARD_TITLE, APP_ID, APP_NAME } from "./branding.js";
 
 const COMPACT_SIZE = 80;
 
@@ -56,6 +57,9 @@ let activeConversationId: string | null = null;
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
+const appIconPath = path.join(desktopRoot, "assets", "icons", "icon-256.png");
+
+app.setName(APP_NAME);
 
 function userFile(name: string): string {
   return path.join(app.getPath("userData"), name);
@@ -180,6 +184,8 @@ function createPetWindow(): void {
     hasShadow: false,
     show: false,
     backgroundColor: "#00000000",
+    title: APP_NAME,
+    icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -297,7 +303,8 @@ function createDashboardWindow(section?: string): BrowserWindow {
     height: 720,
     minWidth: 820,
     minHeight: 600,
-    title: "桌面智能体控制台",
+    title: APP_NAME,
+    icon: appIconPath,
     backgroundColor: "#f4f6f8",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -481,9 +488,9 @@ function updateTrayMenu(): void {
   if (!tray || tray.isDestroyed()) return;
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "显示桌面宠物", click: showPetWindow },
+      { label: `显示 ${APP_NAME}`, click: showPetWindow },
       { label: "展开聊天", click: expandPet },
-      { label: "打开控制台", click: () => createDashboardWindow() },
+      { label: `打开 ${APP_DASHBOARD_TITLE}`, click: () => createDashboardWindow() },
       {
         label: "始终置顶",
         type: "checkbox",
@@ -494,7 +501,7 @@ function updateTrayMenu(): void {
       { label: "重启 Agent", click: () => void restartBackend() },
       { label: "隐藏", click: () => petWindow?.hide() },
       {
-        label: "退出程序",
+        label: `退出 ${APP_NAME}`,
         click: () => {
           quitting = true;
           app.quit();
@@ -508,7 +515,7 @@ function createTray(): void {
   const iconPath = path.join(desktopRoot, "assets", "tray-icon.svg");
   const image = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
   tray = new Tray(image);
-  tray.setToolTip("桌面智能体");
+  tray.setToolTip(APP_NAME);
   updateTrayMenu();
   tray.on("click", showPetWindow);
 }
@@ -516,12 +523,12 @@ function createTray(): void {
 function showPetMenu(): void {
   Menu.buildFromTemplate([
     { label: expanded ? "收起聊天" : "展开聊天", click: expanded ? collapsePet : expandPet },
-    { label: "打开控制台", click: () => createDashboardWindow() },
+    { label: `打开 ${APP_DASHBOARD_TITLE}`, click: () => createDashboardWindow() },
     { label: "隐藏", click: () => petWindow?.hide() },
     { label: "重启 Agent", click: () => void restartBackend() },
     { type: "separator" },
     {
-      label: "退出程序",
+      label: `退出 ${APP_NAME}`,
       click: () => {
         quitting = true;
         app.quit();
@@ -649,6 +656,7 @@ app.on("before-quit", () => {
 });
 
 app.whenReady().then(async () => {
+  if (process.platform === "win32") app.setAppUserModelId(APP_ID);
   const appearanceFile = userFile("ui-preferences.json");
   appearancePreferences = writeAppearancePreferences(
     appearanceFile,

@@ -18,6 +18,7 @@ import {
   normalizeThemePalette
 } from "../utils/colorUtils";
 import { PetAvatar } from "./PetAvatar";
+import { BRAND } from "../branding";
 
 const skinIds: PetSkinId[] = ["classic", "animated-cat", "maltese"];
 const paletteFields: Array<{
@@ -305,7 +306,7 @@ export function AppearanceSettings() {
           </div>
 
           <div className="theme-preview" style={palettePreviewStyle(draftPalette, draftTypography)}>
-            <div className="theme-preview-header"><strong>桌面智能体</strong><span>预览</span></div>
+            <div className="theme-preview-header"><strong>{BRAND.name}</strong><span>预览</span></div>
             <div className="theme-preview-body">
               <p className="preview-copy"><strong>标题文字</strong><span>普通文字与小号状态文字</span></p>
               <div className="preview-message assistant">这是 AI 消息预览。</div>

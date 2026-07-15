@@ -3,6 +3,7 @@ import { getAgentStateLabel } from "../skins/skinRegistry";
 import { useAgentStore } from "../stores/agentStore";
 import { useAppearanceStore } from "../stores/appearanceStore";
 import { PetAvatar } from "./PetAvatar";
+import { BRAND } from "../branding";
 
 export function PetCircle() {
   const visualState = useAgentStore((state) => state.visualState);
@@ -49,7 +50,7 @@ export function PetCircle() {
   return (
     <button
       className={`pet-circle skin-${skinId}`}
-      aria-label={`桌面智能体，${getAgentStateLabel(visualState)}`}
+      aria-label={`${BRAND.name}，${getAgentStateLabel(visualState)}`}
       title={getAgentStateLabel(visualState)}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

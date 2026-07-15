@@ -25,6 +25,7 @@ import { ChatPanel } from "../components/ChatPanel";
 import { AppearanceSettings } from "../components/AppearanceSettings";
 import type { DashboardSection } from "../types";
 import { filterAndGroupSkills, type SkillInfo } from "../utils/skillCatalog";
+import { BRAND } from "../branding";
 
 const navigation: Array<{ id: DashboardSection; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "聊天", icon: MessageSquare },
@@ -54,7 +55,7 @@ export function DashboardPage() {
   return (
     <main className="dashboard-shell">
       <aside className="dashboard-nav">
-        <div className="dashboard-brand"><Bot size={22} /><strong>桌面智能体</strong></div>
+        <div className="dashboard-brand"><img src={BRAND.logoPath} alt="" /><strong>{BRAND.name}</strong></div>
         <nav>
           {navigation.map((item) => {
             const Icon = item.icon;
@@ -236,12 +237,14 @@ function LogsView() {
 }
 
 function AboutView() {
-  const repositoryUrl = "https://github.com/feitianduowen/agentic-playwright-mcp";
   return (
     <div className="page-view about-view">
-      <PageHeading title="关于产品" description="Agentic Playwright MCP 是一个面向浏览器与桌面应用的自然语言自动化智能体。" />
-      <p className="about-description">项目把技能路由、Playwright 自动化、视觉探索和桌面宠物交互整合在同一套工作流中，并将会话、任务与外观设置保存在本机。</p>
-      <dl><dt>桌面端版本</dt><dd>0.1.0</dd><dt>后端</dt><dd>Python · FastAPI · Playwright</dd><dt>数据存储</dt><dd>本机 SQLite</dd><dt>浏览器界面</dt><dd>仅显示目标网页，不注入 Agent UI</dd><dt>GitHub 仓库</dt><dd><button className="external-link" onClick={() => void window.desktopAgent.openExternal(repositoryUrl)}><GitFork size={16} />feitianduowen/agentic-playwright-mcp</button></dd></dl>
+      <section className="about-identity">
+        <img src={BRAND.logoPath} alt={`${BRAND.name} Logo`} />
+        <div><h1>{BRAND.name}</h1><p>{BRAND.tagline}</p></div>
+      </section>
+      <p className="about-description">{BRAND.description} FeatherDesk 把技能路由、Playwright 自动化、视觉探索和桌面宠物交互整合在同一套本地工作流中。</p>
+      <dl><dt>桌面端版本</dt><dd>{BRAND.version}</dd><dt>后端</dt><dd>Python · FastAPI · Playwright</dd><dt>数据存储</dt><dd>本机 SQLite</dd><dt>浏览器界面</dt><dd>仅显示目标网页，不注入 Agent UI</dd><dt>GitHub 仓库</dt><dd><button className="external-link" onClick={() => void window.desktopAgent.openExternal(BRAND.repositoryUrl)}><GitFork size={16} />feitianduowen/agentic-playwright-mcp</button></dd></dl>
     </div>
   );
 }

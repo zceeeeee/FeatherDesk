@@ -8,6 +8,7 @@ import { HistoryPanel } from "./HistoryPanel";
 import { MessageList } from "./MessageList";
 import { PetAvatar } from "./PetAvatar";
 import { WindowResizeHandles } from "./WindowResizeHandles";
+import { BRAND } from "../branding";
 
 export function ChatPanel({ dashboard = false }: { dashboard?: boolean }) {
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -21,7 +22,7 @@ export function ChatPanel({ dashboard = false }: { dashboard?: boolean }) {
       <header className={`chat-header ${dashboard ? "" : "draggable-header"}`}>
         <PetAvatar skinId={skinId} state={state} variant="mini" />
         <div className="agent-heading">
-          <strong>桌面智能体</strong>
+          <strong>{BRAND.name}</strong>
           <span>{AGENT_STATE_LABELS[state]} · {runtime?.model || "规则模式"}</span>
         </div>
         <div className="toolbar-actions" data-no-drag>

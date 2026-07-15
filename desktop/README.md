@@ -1,6 +1,6 @@
-# Desktop pet
+# FeatherDesk
 
-The desktop client replaces the browser-injected panel with an Electron pet,
+FeatherDesk replaces the browser-injected panel with an Electron pet,
 chat window and full dashboard. The Python agent remains responsible for all
 automation.
 

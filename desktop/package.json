@@ -1,6 +1,9 @@
 {
-  "name": "agentic-playwright-desktop",
+  "name": "featherdesk",
+  "productName": "FeatherDesk",
   "version": "0.1.0",
+  "description": "FeatherDesk desktop automation workspace",
+  "author": "FeatherDesk contributors",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,7 +13,9 @@
     "test": "tsc -p tsconfig.test.json && node --test \".test-dist/tests/*.test.js\"",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -24,7 +29,43 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "electron": "latest",
+    "electron-builder": "^26.0.0",
     "typescript": "latest",
     "vite": "latest"
+  },
+  "build": {
+    "appId": "com.featherdesk.app",
+    "productName": "FeatherDesk",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icons/icon.ico",
+      "executableName": "FeatherDesk",
+      "artifactName": "FeatherDesk-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "FeatherDesk",
+      "uninstallDisplayName": "FeatherDesk"
+    }
   }
 }

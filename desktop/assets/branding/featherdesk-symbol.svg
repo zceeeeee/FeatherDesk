@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 500 500">
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500">
   <g fill="#FFFFFF">
     <path d="M 352 189 L 266 206 L 244 218 L 225 243 L 156 370 L 164 362 L 214 289 L 229 271 L 248 264 L 298 256 L 316 251 L 330 237 Z"/>
     <path d="M 405 158 L 395 158 L 395 347 L 389 358 L 383 361 L 178 361 L 171 371 L 383 371 L 397 365 L 405 352 Z"/>

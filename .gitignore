@@ -16,6 +16,7 @@ logs/
 node_modules/
 desktop/dist-electron/
 desktop/.test-dist/
+desktop/release/
 .pytest_cache/
 .mypy_cache/
 site/
@@ -32,6 +33,8 @@ scripts/
 # Screenshots and images
 *.png
 *.jpg
+!desktop/assets/branding/*.png
+!desktop/assets/icons/*.png
 
 # Experience workspace (user-specific)
 workspace/
