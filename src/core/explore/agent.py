@@ -739,6 +739,12 @@ class ExploreAgent:
             logger.warning("Explore bootstrap navigation failed: %s", exc)
             return None
 
+        # SPA 页面 load 事件触发后交互元素可能尚未渲染，等待网络空闲
+        try:
+            page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:
+            logger.debug("networkidle wait timed out, continuing anyway")
+
         logger.info("Explore bootstrap navigated to %s", target_url)
         self.just_navigated_to_entry = True
         self.explore_mode_active = True  # 标记整个任务进入 Explore 模式
