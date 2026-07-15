@@ -7,7 +7,12 @@ from types import SimpleNamespace
 
 from src.core.script_engine import ScriptEngine
 from src.core.skill_router import SkillRouter
-from src.layer_1.wps_writer import PDF_FORMAT, export_article_to_pdf
+from src.layer_1.wps_writer import (
+    DEFAULT_OUTPUT_DIR,
+    PDF_FORMAT,
+    _resolve_paths,
+    export_article_to_pdf,
+)
 from src.skill_library.export.wps_writer_export import run
 
 
@@ -100,6 +105,13 @@ class FakeApplication:
         self.quit_called = True
 
 
+def test_default_wps_output_uses_project_out_directory():
+    docx, pdf = _resolve_paths("默认路径测试", file_name="default-output-test")
+
+    assert docx.parent == DEFAULT_OUTPUT_DIR.resolve()
+    assert pdf.parent == DEFAULT_OUTPUT_DIR.resolve()
+
+
 def test_export_article_to_pdf_uses_wps_com_and_exports_pdf(tmp_path):
     app = FakeApplication()
     requested_prog_ids: list[str] = []
@@ -181,7 +193,7 @@ def test_export_markdown_file_to_wps_applies_headings_and_inline_styles(tmp_path
     app = FakeApplication()
     md_path = tmp_path / "tmp.md"
     md_path.write_text(
-        "# 一级标题\n\n正文包含 **加粗** 和 *斜体*。\n\n## 二级标题\n##### 五级标题\n",
+        "# 文档标题\n\n主送机关：\n\n正文包含 **加粗** 和 *斜体*。\n\n## 一级标题\n### 二级标题\n",
         encoding="utf-8",
     )
 
@@ -196,20 +208,57 @@ def test_export_markdown_file_to_wps_applies_headings_and_inline_styles(tmp_path
     )
 
     assert result["success"] is True
-    assert result["title"] == "一级标题"
-    assert result["font_size"] == 14
+    assert result["title"] == "文档标题"
+    assert result["font_size"] == 16
+    assert result["font_name"] == "仿宋_GB2312"
+    assert result["title_font_name"] == "方正小标宋简体"
+    assert result["title_font_size"] == 22
     assert result["markdown_path"] == str(md_path.resolve())
     assert result["heading_count"] == 3
     assert result["inline_style_count"] >= 2
-    assert "一级标题" in app.Selection.typed
+    assert "文档标题" in app.Selection.typed
     assert "正文包含 " in app.Selection.typed
     bold = next(item for item in app.Selection.formatted if item["text"] == "加粗")
     italic = next(item for item in app.Selection.formatted if item["text"] == "斜体")
+    title = next(item for item in app.Selection.formatted if item["text"] == "文档标题")
     h1 = next(item for item in app.Selection.formatted if item["text"] == "一级标题")
     h2 = next(item for item in app.Selection.formatted if item["text"] == "二级标题")
     assert bold["bold"] == -1
     assert italic["italic"] == -1
-    assert h1["font"] != h2["font"]
+    assert title["font"] == "方正小标宋简体"
+    assert title["size"] == 22
+    assert title["bold"] == 0
+    assert h1["font"] == "黑体"
+    assert h1["size"] == 16
+    assert h1["bold"] == -1
+    assert h2["font"] == "楷体_GB2312"
+    assert h2["size"] == 16
+    assert h2["bold"] == -1
+    title_index = app.Selection.typed.index("文档标题")
+    assert app.Selection.typed[title_index + 1 : title_index + 4] == ["\n", "\n", "\n"]
+
+
+def test_export_generated_markdown_body_applies_inline_styles(tmp_path):
+    app = FakeApplication()
+
+    result = export_article_to_pdf(
+        title="测试文章",
+        body="## 核心观点\n正文包含 **加粗内容** 和 *斜体内容*。\n\n- 第一项",
+        body_format="markdown",
+        output_dir=str(tmp_path),
+        keep_open=True,
+        visible=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["success"] is True
+    assert result["body_format"] == "markdown"
+    assert result["heading_count"] == 2
+    assert result["inline_style_count"] >= 2
+    bold = next(item for item in app.Selection.formatted if item["text"] == "加粗内容")
+    italic = next(item for item in app.Selection.formatted if item["text"] == "斜体内容")
+    assert bold["bold"] == -1
+    assert italic["italic"] == -1
 
 
 def test_skill_run_calls_registered_export_function():
@@ -239,8 +288,13 @@ def test_skill_run_calls_registered_export_function():
             "pdf_path": None,
             "file_name": None,
             "markdown_path": None,
+            "body_format": None,
             "font_name": None,
             "font_size": None,
+            "title_font_name": None,
+            "title_font_size": None,
+            "body_font_name": None,
+            "body_font_size": None,
             "font_color": None,
             "italic": None,
             "image_path": None,
@@ -284,8 +338,16 @@ def test_router_routes_wps_writer_export_to_wps_skill():
 
     assert decision.skill is not None
     assert decision.skill.id == "domain/wps_writer_export"
-    assert 'title="测试标题"' in decision.script
-    assert 'body="测试正文"' in decision.script
+    assert '"测试标题"' in decision.script
+    assert '"测试正文"' in decision.script
+    assert "__agentic_prepare_wps_title" in decision.script
+    assert "__agentic_prepare_wps_body" in decision.script
+    assert "body_format=__agentic_wps_body_format" in decision.script
+    assert "使用默认值 {default}" in decision.script
+    assert "'标题字体'," in decision.script and "方正小标宋简体" in decision.script
+    assert "'标题字号'," in decision.script and '"22"' in decision.script
+    assert "'正文字体'," in decision.script and "仿宋_GB2312" in decision.script
+    assert "'正文字号'," in decision.script and '"16"' in decision.script
     assert "wps_writer_export" in decision.script
 
 
@@ -298,11 +360,12 @@ def test_router_routes_wps_docx_pdf_path_and_font_request():
 
     assert decision.skill is not None
     assert decision.skill.id == "domain/wps_writer_export"
-    assert 'title="edewvr"' in decision.script
-    assert 'body="wewret"' in decision.script
-    assert 'pdf_path="D:tmptest.pdf"' in decision.script
-    assert 'font_name="宋体"' in decision.script
-    assert 'font_size="14"' in decision.script
+    assert '"edewvr"' in decision.script
+    assert '"wewret"' in decision.script
+    assert '"D:tmptest.pdf"' in decision.script
+    assert '"宋体"' in decision.script
+    assert '"14"' in decision.script
+    assert "__param_output_dir, __param_docx_path, __param_pdf_path" in decision.script
 
 
 def test_router_routes_wps_style_and_insert_image_request():
@@ -314,12 +377,12 @@ def test_router_routes_wps_style_and_insert_image_request():
 
     assert decision.skill is not None
     assert decision.skill.id == "domain/wps_writer_export"
-    assert 'title="edewvr"' in decision.script
-    assert 'body="wewret"' in decision.script
+    assert '"edewvr"' in decision.script
+    assert '"wewret"' in decision.script
     assert 'file_name="测试"' in decision.script
-    assert 'pdf_path="D:/tmp/test.pdf"' in decision.script
-    assert 'font_name="宋体"' in decision.script
-    assert 'font_size="14"' in decision.script
+    assert '"D:/tmp/test.pdf"' in decision.script
+    assert '"宋体"' in decision.script
+    assert '"14"' in decision.script
     assert 'font_color="红色"' in decision.script
     assert 'italic="斜体"' in decision.script
     assert (
@@ -335,5 +398,5 @@ def test_router_routes_markdown_file_to_wps_article():
 
     assert decision.skill is not None
     assert decision.skill.id == "domain/wps_writer_export"
-    assert 'markdown_path="D:\\\\fagougou\\\\doc\\\\tmp.md"' in decision.script
+    assert '"D:\\\\fagougou\\\\doc\\\\tmp.md"' in decision.script
     assert 'file_name="fev"' in decision.script

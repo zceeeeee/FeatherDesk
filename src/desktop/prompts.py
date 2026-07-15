@@ -83,7 +83,9 @@ def parse_desktop_prompt(
     )
     if field_default is not None:
         field_default = str(field_default)
-    default_value = current_value if not current_is_missing else field_default
+    default_value = field_default if field_default is not None else (
+        current_value if current_value is not None else None
+    )
     skill_name, parameter_name = _extract_context(question)
     asks_for_input = bool(
         field_defs

@@ -212,6 +212,16 @@ class SkillRouter:
 
         top_skill, top_score = candidates[0]
 
+        if top_skill.id == "domain/wps_writer_export" and top_score >= 0.9:
+            script = self.build_script(top_skill, task)
+            return SkillDecision(
+                skill=top_skill,
+                confidence=min(top_score, 1.0),
+                reason=f"WPS 高置信命中: {top_skill.name}",
+                source="keyword",
+                script=script,
+            )
+
         # ── Stage 2: 双重阈值判断 ──
         # > 0.8 → 高置信直接通过（跳过 LLM）
         # 0.6 ~ 0.8 → 模糊区，送 LLM 精排
@@ -425,6 +435,239 @@ class SkillRouter:
             f"__param_add_picture = __agentic_prepare_zhihu_add_picture({add_picture_value})\n\n"
             f"{auth_wait}"
             f"# 自动调用\nrun(title=__param_title, keyword=__param_keyword, add_picture=__param_add_picture)"
+        )
+
+    def _build_wps_writer_param_script(
+        self,
+        source_code: str,
+        skill: SkillRouterInfo,
+        extracted: Dict[str, str],
+    ) -> str:
+        """Build WPS Writer prompts before opening the desktop app."""
+        title_value = json.dumps(extracted.get("title", "-1"), ensure_ascii=False)
+        body_value = json.dumps(extracted.get("body", "-1"), ensure_ascii=False)
+        markdown_path_value = json.dumps(
+            extracted.get("markdown_path", "-1"), ensure_ascii=False
+        )
+        body_format_value = json.dumps(
+            extracted.get("body_format", "-1"), ensure_ascii=False
+        )
+        output_dir_value = json.dumps(extracted.get("output_dir", "-1"), ensure_ascii=False)
+        docx_path_value = json.dumps(extracted.get("docx_path", "-1"), ensure_ascii=False)
+        pdf_path_value = json.dumps(extracted.get("pdf_path", "-1"), ensure_ascii=False)
+        file_name_value = json.dumps(extracted.get("file_name", "-1"), ensure_ascii=False)
+        font_name_value = json.dumps(extracted.get("font_name", "-1"), ensure_ascii=False)
+        font_size_value = json.dumps(extracted.get("font_size", "-1"), ensure_ascii=False)
+        title_font_name_value = json.dumps(
+            extracted.get("title_font_name", "-1"), ensure_ascii=False
+        )
+        title_font_size_value = json.dumps(
+            extracted.get("title_font_size", "-1"), ensure_ascii=False
+        )
+        body_font_name_value = json.dumps(
+            extracted.get("body_font_name", "-1"), ensure_ascii=False
+        )
+        body_font_size_value = json.dumps(
+            extracted.get("body_font_size", "-1"), ensure_ascii=False
+        )
+        title_font_name_default = json.dumps(
+            skill.params.get("title_font_name", {}).get("default", "方正小标宋简体"),
+            ensure_ascii=False,
+        )
+        title_font_size_default = json.dumps(
+            skill.params.get("title_font_size", {}).get("default", "22"),
+            ensure_ascii=False,
+        )
+        body_font_name_default = json.dumps(
+            skill.params.get("body_font_name", {}).get("default", "仿宋_GB2312"),
+            ensure_ascii=False,
+        )
+        body_font_size_default = json.dumps(
+            skill.params.get("body_font_size", {}).get("default", "16"),
+            ensure_ascii=False,
+        )
+        font_color_value = json.dumps(extracted.get("font_color", "-1"), ensure_ascii=False)
+        italic_value = json.dumps(extracted.get("italic", "-1"), ensure_ascii=False)
+        image_path_value = json.dumps(extracted.get("image_path", "-1"), ensure_ascii=False)
+        default_output_dir_value = json.dumps(
+            str(Path(__file__).resolve().parents[2] / "out"), ensure_ascii=False
+        )
+        title_ai_generate = bool(skill.params.get("title", {}).get("ai_generate", False))
+        body_ai_generate = bool(skill.params.get("body", {}).get("ai_generate", False))
+
+        helper = (
+            "\n\n# WPS Writer AI/manual parameter confirmation\n"
+            "def __agentic_is_missing_param(value):\n"
+            "    return value is None or str(value).strip() in {'', '-1', 'None', 'none', 'null'}\n\n"
+            "def __agentic_is_ai_mode(answer):\n"
+            "    text = str(answer or '').strip().lower()\n"
+            "    return text in {'ai', 'ai生成', '生成', '自动生成', 'yes', 'y', '1', 'true', '是'}\n\n"
+            "def __agentic_required_input(question, name):\n"
+            "    attempts = 0\n"
+            "    while True:\n"
+            "        attempts += 1\n"
+            "        answer = panel_prompt(question)\n"
+            "        answer = str(answer or '').strip()\n"
+            "        if answer:\n"
+            "            return answer\n"
+            "        if attempts >= 3:\n"
+            "            raise RuntimeError(f'缺少必填参数：{name}')\n"
+            "        question = f'{name}不能为空，请重新输入：'\n\n"
+            "def __agentic_confirm_required(name, current, label):\n"
+            "    attempts = 0\n"
+            "    while True:\n"
+            "        attempts += 1\n"
+            "        answer = panel_prompt(\n"
+            "            f'请确认 WPS 的「{label}」。当前值：{current}。如需修改请输入新值，直接回车则沿用当前值：'\n"
+            "        )\n"
+            "        answer = str(answer or '').strip()\n"
+            "        if answer:\n"
+            "            return answer\n"
+            "        if not __agentic_is_missing_param(current):\n"
+            "            return current\n"
+            "        if attempts >= 3:\n"
+            "            raise RuntimeError(f'缺少必填参数：{name}')\n"
+            "        current = '-1'\n\n"
+            "def __agentic_optional_input(label, current, default):\n"
+            "    shown = current if not __agentic_is_missing_param(current) else default\n"
+            "    panel_set_fields([{\n"
+            "        'name': label,\n"
+            "        'label': label,\n"
+            "        'required': False,\n"
+            "        'default_value': default,\n"
+            "    }])\n"
+            "    try:\n"
+            "        answer = panel_prompt(\n"
+            "            f'请输入 WPS 的「{label}」。已识别值：{shown}。也可以点击“使用默认值 {default}”。'\n"
+            "        )\n"
+            "    finally:\n"
+            "        panel_set_fields([])\n"
+            "    answer = str(answer or '').strip()\n"
+            "    if answer:\n"
+            "        return answer\n"
+            "    return default\n\n"
+            "def __agentic_generate_text(prompt, label):\n"
+            "    try:\n"
+            "        text = llm_generate_text(prompt)\n"
+            "    except Exception as exc:\n"
+            "        raise RuntimeError(f'AI生成{label}失败：{exc}')\n"
+            "    text = str(text or '').strip()\n"
+            "    if not text:\n"
+            "        raise RuntimeError(f'AI生成{label}失败：返回为空')\n"
+            "    return text\n\n"
+            "def __agentic_prepare_wps_body(current, current_title, allow_ai, markdown_path):\n"
+            "    global __agentic_wps_body_format\n"
+            "    if not __agentic_is_missing_param(markdown_path):\n"
+            "        return current\n"
+            "    if allow_ai:\n"
+            "        mode = panel_prompt('WPS 正文请选择输入方式：[AI生成] [手动输入/确认]')\n"
+            "    else:\n"
+            "        mode = '手动输入/确认'\n"
+            "    if allow_ai and __agentic_is_ai_mode(mode):\n"
+            "        __agentic_wps_body_format = 'markdown'\n"
+            "        if __agentic_is_missing_param(current):\n"
+            "            topic = __agentic_required_input('请输入 WPS 文章主题或内容要求：', '文章主题')\n"
+            "        else:\n"
+            "            topic = current\n"
+            "        count = __agentic_required_input('请输入 WPS 正文字数（例如 800）：', '正文字数')\n"
+            "        prompt = (\n"
+            "            f'请根据文档标题“{current_title}”和内容要求“{topic}”生成一篇中文文章正文，字数约{count}字。'\n"
+            "            '要求结构清晰、表达自然，可直接放入 WPS 文档；如有主送机关，正文须从主送机关的下一行开始。'\n"
+            "            '请直接输出 Markdown 正文，不要输出一级标题、说明或 Markdown 代码块。'\n"
+            "            '正文应使用 ## 表示一级标题、### 表示二级标题；关键观点可加粗（**文字**），重点短语可斜体（*文字*），并可使用有序或无序列表。'\n"
+            "        )\n"
+            "        try:\n"
+            "            return __agentic_generate_text(prompt, 'WPS正文')\n"
+            "        except Exception as exc:\n"
+            "            __agentic_wps_body_format = 'plain'\n"
+            "            fallback = panel_prompt(f'AI生成 WPS 正文失败：{exc}。请手动输入正文后继续：')\n"
+            "            fallback = str(fallback or '').strip()\n"
+            "            if fallback:\n"
+            "                return fallback\n"
+            "            return __agentic_required_input('请手动输入 WPS 正文：', '正文')\n"
+            "    return __agentic_confirm_required('body', current, '正文内容')\n\n"
+            "def __agentic_prepare_wps_title(current, body, allow_ai, markdown_path):\n"
+            "    if not __agentic_is_missing_param(markdown_path) and not __agentic_is_missing_param(current):\n"
+            "        return current\n"
+            "    if allow_ai:\n"
+            "        mode = panel_prompt('WPS 标题请选择输入方式：[AI生成] [手动输入/确认]')\n"
+            "    else:\n"
+            "        mode = '手动输入/确认'\n"
+            "    if allow_ai and __agentic_is_ai_mode(mode):\n"
+            "        count = panel_prompt('请输入 WPS 标题字数限制（可直接回车使用 20）：')\n"
+            "        count = str(count or '').strip() or '20'\n"
+            "        prompt = (\n"
+            "            f'请根据下面正文生成一个适合 WPS 文档的中文标题，不超过{count}字。'\n"
+            "            '要求准确、自然。只输出标题。\\n\\n正文：\\n'\n"
+            "            f'{body}'\n"
+            "        )\n"
+            "        try:\n"
+            "            return __agentic_generate_text(prompt, 'WPS标题')\n"
+            "        except Exception as exc:\n"
+            "            fallback = panel_prompt(f'AI生成 WPS 标题失败：{exc}。请手动输入标题后继续：')\n"
+            "            fallback = str(fallback or '').strip()\n"
+            "            if fallback:\n"
+            "                return fallback\n"
+            "            return __agentic_required_input('请手动输入 WPS 标题：', '标题')\n"
+            "    return __agentic_confirm_required('title', current, '文档标题')\n\n"
+            "def __agentic_prepare_wps_save_path(output_dir, docx_path, pdf_path, default_output_dir):\n"
+            "    current = default_output_dir\n"
+            "    for candidate in (pdf_path, docx_path, output_dir):\n"
+            "        if not __agentic_is_missing_param(candidate):\n"
+            "            current = candidate\n"
+            "            break\n"
+            "    answer = panel_prompt(\n"
+            "        f'请输入或确认 WPS 保存地址（可填目录、.docx 或 .pdf；直接回车使用默认/当前值）。当前值：{current}'\n"
+            "    )\n"
+            "    answer = str(answer or '').strip()\n"
+            "    if not answer:\n"
+            "        answer = current\n"
+            "    if __agentic_is_missing_param(answer):\n"
+            "        return output_dir, docx_path, pdf_path\n"
+            "    lowered = answer.lower()\n"
+            "    if lowered.endswith('.pdf'):\n"
+            "        return '-1', '-1', answer\n"
+            "    if lowered.endswith('.docx') or lowered.endswith('.doc'):\n"
+            "        return '-1', answer, '-1'\n"
+            "    return answer, '-1', '-1'\n"
+        )
+
+        return (
+            f"{source_code}"
+            f"{helper}"
+            f"__agentic_wps_body_format = {body_format_value}\n"
+            "if __agentic_is_missing_param(__agentic_wps_body_format):\n"
+            "    __agentic_wps_body_format = 'plain'\n"
+            f"__wps_markdown_path = {markdown_path_value}\n"
+            f"__param_body = __agentic_prepare_wps_body({body_value}, {title_value}, {body_ai_generate!r}, __wps_markdown_path)\n"
+            f"__param_title = __agentic_prepare_wps_title({title_value}, __param_body, {title_ai_generate!r}, __wps_markdown_path)\n"
+            f"__legacy_font_name = {font_name_value}\n"
+            f"__legacy_font_size = {font_size_value}\n"
+            f"__param_title_font_name = __agentic_optional_input('标题字体', {title_font_name_value} if not __agentic_is_missing_param({title_font_name_value}) else __legacy_font_name, {title_font_name_default})\n"
+            f"__param_title_font_size = __agentic_optional_input('标题字号', {title_font_size_value}, {title_font_size_default})\n"
+            f"__param_body_font_name = __agentic_optional_input('正文字体', {body_font_name_value} if not __agentic_is_missing_param({body_font_name_value}) else __legacy_font_name, {body_font_name_default})\n"
+            f"__param_body_font_size = __agentic_optional_input('正文字号', {body_font_size_value} if not __agentic_is_missing_param({body_font_size_value}) else __legacy_font_size, {body_font_size_default})\n"
+            f"__param_output_dir, __param_docx_path, __param_pdf_path = __agentic_prepare_wps_save_path({output_dir_value}, {docx_path_value}, {pdf_path_value}, {default_output_dir_value})\n\n"
+            "# 自动调用\n"
+            "run(\n"
+            "    title=__param_title,\n"
+            "    body=__param_body,\n"
+            "    output_dir=__param_output_dir,\n"
+            "    docx_path=__param_docx_path,\n"
+            "    pdf_path=__param_pdf_path,\n"
+            f"    file_name={file_name_value},\n"
+            "    markdown_path=__wps_markdown_path,\n"
+            "    body_format=__agentic_wps_body_format,\n"
+            "    font_name=__legacy_font_name,\n"
+            "    font_size=__legacy_font_size,\n"
+            "    title_font_name=__param_title_font_name,\n"
+            "    title_font_size=__param_title_font_size,\n"
+            "    body_font_name=__param_body_font_name,\n"
+            "    body_font_size=__param_body_font_size,\n"
+            f"    font_color={font_color_value},\n"
+            f"    italic={italic_value},\n"
+            f"    image_path={image_path_value},\n"
+            ")"
         )
 
     @staticmethod
@@ -674,6 +917,9 @@ class SkillRouter:
 
         source_code = source_path.read_text(encoding="utf-8")
 
+        if skill.id == "domain/wps_writer_export" and skill.params:
+            return self._build_parametrized_script(source_code, skill, task)
+
         # 检查源码是否已经自带 run() 调用
         code_without_defs = re.sub(r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code)
         if "run(" in code_without_defs:
@@ -708,6 +954,9 @@ class SkillRouter:
 
         if skill.id == "domain/zhihu_send":
             return self._build_zhihu_article_param_script(source_code, skill, extracted)
+
+        if skill.id == "domain/wps_writer_export":
+            return self._build_wps_writer_param_script(source_code, skill, extracted)
 
         param_lines = []
         args_parts = []

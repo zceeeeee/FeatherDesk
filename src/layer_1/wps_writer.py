@@ -17,6 +17,8 @@ WPS_PROG_IDS = (
 
 DOCX_FORMAT = 16
 PDF_FORMAT = 17
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "out"
 
 WORD_COLOR_VALUES = {
     "black": 0,
@@ -41,11 +43,14 @@ KNOWN_FONT_NAMES = (
     "Times New Roman",
     "Arial",
     "SimSun",
+    "方正小标宋简体",
+    "小标宋体",
     "宋体",
     "黑体",
     "楷体",
     "楷体_GB2312",
     "仿宋",
+    "仿宋_GB2312",
     "微软雅黑",
 )
 
@@ -64,11 +69,10 @@ FONT_STYLE_TOKENS = (
 )
 
 MARKDOWN_HEADING_STYLES = {
-    1: {"font": "\u9ed1\u4f53", "size_add": 12},
-    2: {"font": "Microsoft YaHei", "size_add": 10},
-    3: {"font": "\u6977\u4f53", "size_add": 8},
-    4: {"font": "\u4eff\u5b8b", "size_add": 6},
-    5: {"font": "SimSun", "size_add": 4},
+    1: {"font": "黑体", "size": 16, "bold": True},
+    2: {"font": "楷体_GB2312", "size": 16, "bold": True},
+    3: {"font": "仿宋_GB2312", "size": 16, "bold": True},
+    4: {"font": "仿宋_GB2312", "size": 16, "bold": True},
 }
 
 
@@ -175,7 +179,7 @@ def _resolve_paths(
     base_dir = (
         Path(normalized_output_dir).expanduser()
         if normalized_output_dir
-        else Path.home() / "Documents" / "agentic-playwright-mcp" / "wps_exports"
+        else DEFAULT_OUTPUT_DIR
     )
     base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -385,6 +389,29 @@ def _type_rich_paragraph(
     return inline_styles
 
 
+def _type_document_title(
+    selection: Any,
+    text: str,
+    font_name: str,
+    size: int,
+    *,
+    color: int | None = None,
+) -> int:
+    inline_styles = _type_rich_paragraph(
+        selection,
+        text,
+        font_name,
+        size,
+        bold=False,
+        color=color,
+        alignment=1,
+    )
+    # 公文标题下空两行，再开始正文或主送机关。
+    _call(selection, "TypeParagraph")
+    _call(selection, "TypeParagraph")
+    return inline_styles
+
+
 def _read_markdown_file(markdown_path: str | None) -> tuple[str, str] | None:
     normalized = _normalize_windows_path(markdown_path)
     if not normalized:
@@ -406,6 +433,19 @@ def _first_markdown_heading(markdown_text: str) -> str | None:
         if match:
             return re.sub(r"[*_`]+", "", match.group(1)).strip() or None
     return None
+
+
+def _without_first_markdown_heading(markdown_text: str) -> str:
+    lines = markdown_text.splitlines()
+    for index, line in enumerate(lines):
+        if re.match(r"^\s{0,3}#\s+(.+?)\s*#*\s*$", line):
+            return "\n".join(lines[:index] + lines[index + 1 :])
+    return markdown_text
+
+
+def _is_markdown_format(body_format: str | None) -> bool:
+    value = _clean_text(body_format).lower()
+    return value in {"markdown", "md", "markdown格式", "带格式"}
 
 
 def _render_markdown(
@@ -431,13 +471,14 @@ def _render_markdown(
         heading = re.match(r"^\s{0,3}(#{1,5})\s+(.+?)\s*#*\s*$", raw_line)
         if heading:
             level = len(heading.group(1))
-            style = MARKDOWN_HEADING_STYLES.get(level, MARKDOWN_HEADING_STYLES[5])
+            outline_level = 1 if level <= 2 else min(level - 1, 4)
+            style = MARKDOWN_HEADING_STYLES[outline_level]
             inline_style_count += _type_rich_paragraph(
                 selection,
                 heading.group(2).strip(),
                 str(style["font"]),
-                body_size + int(style["size_add"]),
-                bold=True,
+                int(style["size"]),
+                bold=bool(style["bold"]),
                 color=font_color,
             )
             heading_count += 1
@@ -543,10 +584,15 @@ def export_article_to_pdf(
     pdf_path: str | None = None,
     file_name: str | None = None,
     markdown_path: str | None = None,
+    body_format: str | None = None,
     keep_open: bool = True,
     visible: bool = True,
     font_name: str | None = None,
     font_size: int | str | None = None,
+    title_font_name: str | None = None,
+    title_font_size: int | str | None = None,
+    body_font_name: str | None = None,
+    body_font_size: int | str | None = None,
     font_color: int | str | None = None,
     italic: bool | str | None = None,
     image_path: str | None = None,
@@ -557,15 +603,19 @@ def export_article_to_pdf(
     markdown_data = _read_markdown_file(markdown_path)
     markdown_text = markdown_data[0] if markdown_data else None
     normalized_markdown_path = markdown_data[1] if markdown_data else None
+    body_is_markdown = _is_markdown_format(body_format)
     markdown_title = _first_markdown_heading(markdown_text) if markdown_text else None
 
     title_text = _clean_text(title) or markdown_title or "未命名文档"
     body_text = _clean_text(body)
     if not body_text and markdown_text is None:
         raise ValueError("WPS export requires article body content")
-    body_font = _normalize_font_name(font_name) or "Microsoft YaHei"
-    body_size = _int_or_default(font_size, 14)
-    title_size = max(body_size + 6, 18)
+    legacy_font = _normalize_font_name(font_name)
+    body_font = _normalize_font_name(body_font_name) or legacy_font or "仿宋_GB2312"
+    body_size_source = body_font_size if body_font_size is not None else font_size
+    body_size = _int_or_default(body_size_source, 16)
+    title_font = _normalize_font_name(title_font_name) or legacy_font or "方正小标宋简体"
+    title_size = _int_or_default(title_font_size, 22)
     font_color_value = _font_color_value(font_color)
     italic_enabled = _is_italic(italic)
 
@@ -581,21 +631,44 @@ def export_article_to_pdf(
     heading_count = 0
     inline_style_count = 0
     if markdown_text is not None:
-        if _clean_text(title) and not markdown_title:
-            _type_rich_paragraph(
-                selection,
-                title_text,
-                str(MARKDOWN_HEADING_STYLES[1]["font"]),
-                body_size + int(MARKDOWN_HEADING_STYLES[1]["size_add"]),
-                bold=True,
-                color=font_color_value,
-                alignment=1,
-            )
-            paragraph_count += 1
-            heading_count += 1
+        inline_style_count += _type_document_title(
+            selection,
+            title_text,
+            title_font,
+            title_size,
+            color=font_color_value,
+        )
+        paragraph_count += 1
+        heading_count += 1
+        markdown_body = (
+            _without_first_markdown_heading(markdown_text)
+            if markdown_title
+            else markdown_text
+        )
         markdown_result = _render_markdown(
             selection,
-            markdown_text,
+            markdown_body,
+            body_font=body_font,
+            body_size=body_size,
+            font_color=font_color_value,
+            base_italic=italic_enabled,
+        )
+        paragraph_count += markdown_result["paragraph_count"]
+        heading_count += markdown_result["heading_count"]
+        inline_style_count += markdown_result["inline_style_count"]
+    elif body_is_markdown:
+        inline_style_count += _type_document_title(
+            selection,
+            title_text,
+            title_font,
+            title_size,
+            color=font_color_value,
+        )
+        paragraph_count += 1
+        heading_count += 1
+        markdown_result = _render_markdown(
+            selection,
+            body_text,
             body_font=body_font,
             body_size=body_size,
             font_color=font_color_value,
@@ -605,16 +678,13 @@ def export_article_to_pdf(
         heading_count += markdown_result["heading_count"]
         inline_style_count += markdown_result["inline_style_count"]
     else:
-        _set_font(
+        _type_document_title(
             selection,
-            body_font,
+            title_text,
+            title_font,
             title_size,
-            True,
-            italic=italic_enabled,
             color=font_color_value,
         )
-        _set_paragraph(selection, alignment=1)
-        _type_paragraph(selection, title_text)
 
         _set_font(
             selection,
@@ -660,9 +730,14 @@ def export_article_to_pdf(
         "inline_style_count": inline_style_count,
         "font_name": body_font,
         "font_size": body_size,
+        "title_font_name": title_font,
+        "title_font_size": title_size,
+        "body_font_name": body_font,
+        "body_font_size": body_size,
         "font_color": font_color_value,
         "italic": italic_enabled,
         "image_path": inserted_image_path,
         "markdown_path": normalized_markdown_path,
+        "body_format": "markdown" if body_is_markdown else "plain",
         "keep_open": keep_open,
     }

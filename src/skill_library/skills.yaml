@@ -113,12 +113,14 @@ skills:
     params:
       title:
         type: title
-        required: false
+        required: true
         description: "文档标题"
+        ai_generate: true
       body:
         type: body
-        required: false
+        required: true
         description: "正文内容"
+        ai_generate: true
       markdown_path:
         type: string
         required: false
@@ -126,6 +128,10 @@ skills:
         extract_patterns:
           - '(?:Markdown路径|md路径|markdown_path|源文件|文件|路径)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.md)'
           - '["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.md)'
+      body_format:
+        type: string
+        required: false
+        description: "正文格式，支持 plain 或 markdown；AI 生成正文时自动使用 markdown"
       output_dir:
         type: string
         required: false
@@ -166,6 +172,34 @@ skills:
         extract_patterns:
           - '(?:字号|字体大小|font_size)\s*(?:是|为|:|：)?\s*(\d{1,2})'
           - '(?:字体|font).{0,20}?(\d{1,2})\s*号?'
+      title_font_name:
+        type: string
+        required: false
+        default: "方正小标宋简体"
+        description: "标题字体名称，默认方正小标宋简体；标题居中且下空二行"
+        extract_patterns:
+          - '(?:标题字体|标题使用字体|标题的字体|title_font_name)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z\u4e00-\u9fff_ ]+?)(?=\s*\d+\s*号|\s*字号|[,，。;；]|$)'
+      title_font_size:
+        type: string
+        required: false
+        default: "22"
+        description: "标题字号，默认二号（22磅）"
+        extract_patterns:
+          - '(?:标题字号|标题字体大小|title_font_size)\s*(?:是|为|:|：)?\s*(\d{1,2})'
+      body_font_name:
+        type: string
+        required: false
+        default: "仿宋_GB2312"
+        description: "正文字体名称，默认仿宋_GB2312；Markdown 的 ## 一级标题使用三号黑体，### 二级标题使用三号楷体加粗"
+        extract_patterns:
+          - '(?:正文字体|正文使用字体|内容字体|body_font_name)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z\u4e00-\u9fff_ ]+?)(?=\s*\d+\s*号|\s*字号|[,，。;；]|$)'
+      body_font_size:
+        type: string
+        required: false
+        default: "16"
+        description: "正文字号，默认三号（16磅）"
+        extract_patterns:
+          - '(?:正文字号|正文字体大小|内容字号|body_font_size)\s*(?:是|为|:|：)?\s*(\d{1,2})'
       font_color:
         type: string
         required: false

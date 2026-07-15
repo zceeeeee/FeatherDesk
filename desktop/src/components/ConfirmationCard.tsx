@@ -13,6 +13,9 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
   const [submitting, setSubmitting] = useState(false);
   const [requiredCancelArmed, setRequiredCancelArmed] = useState(false);
   const pending = confirmation.status === "pending";
+  const hasDefaultValue = confirmation.default_value !== null
+    && confirmation.default_value !== undefined
+    && confirmation.default_value !== "";
   const options = useMemo(
     () => confirmation.options || confirmation.actions?.filter((action) => action.id.startsWith("option_")) || [],
     [confirmation.actions, confirmation.options]
@@ -49,6 +52,19 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
 
   async function useDefaultOrCancelTask() {
     if (!pending || submitting) return;
+    if (hasDefaultValue) {
+      setSubmitting(true);
+      try {
+        await approve(
+          confirmation.confirmation_id,
+          confirmation.default_value ?? confirmation.current_value ?? "",
+          confirmation.prompt_type === "confirm_value" ? "keep" : "default"
+        );
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
     if (confirmation.input_required) {
       if (!requiredCancelArmed) {
         setRequiredCancelArmed(true);
@@ -139,6 +155,13 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
 
       {pending && (confirmation.prompt_type === "input" || confirmation.prompt_type === "confirm_value") ? (
         <div className="prompt-input">
+          {hasDefaultValue ? (
+            <div className="input-choice-row">
+              <button className="button-secondary default-value-button" disabled={submitting} onClick={() => void useDefaultOrCancelTask()}>
+                <Check size={16} />使用默认值 {confirmation.default_value}
+              </button>
+            </div>
+          ) : null}
           <label htmlFor={`prompt-${confirmation.confirmation_id}`}>
             {confirmation.input_label || "输入内容"}
             <span className={requiredCancelArmed ? "required-indicator required-alert" : "required-indicator"}>
@@ -165,7 +188,7 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
             autoFocus
           />
           <div className="confirmation-actions">
-            {confirmation.prompt_type === "confirm_value" ? (
+            {confirmation.prompt_type === "confirm_value" && !hasDefaultValue ? (
               <button className="button-secondary" disabled={submitting} onClick={() => void keepCurrent()}>
                 <Check size={16} />沿用当前值
               </button>
@@ -173,7 +196,7 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
             <button className="button-primary" disabled={submitting || !inputValue.trim()} onClick={() => void submitInput(confirmation.prompt_type === "confirm_value" ? "replace" : "submit")}>
               <PencilLine size={16} />{confirmation.prompt_type === "confirm_value" ? "使用新值" : "提交并继续"}
             </button>
-            <button
+            {!hasDefaultValue ? <button
               className={`icon-cancel ${requiredCancelArmed ? "cancel-armed" : ""}`}
               title={confirmation.input_required
                 ? requiredCancelArmed ? "再次点击停止任务" : "必填项：再次点击将停止任务"
@@ -184,8 +207,12 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
               disabled={submitting}
               onClick={() => void useDefaultOrCancelTask()}
             >
-              {requiredCancelArmed ? <Square size={14} fill="currentColor" /> : <X size={16} />}
-            </button>
+              {confirmation.input_required ? (
+                requiredCancelArmed ? <Square size={14} fill="currentColor" /> : <X size={16} />
+              ) : (
+                <X size={16} />
+              )}
+            </button> : null}
           </div>
         </div>
       ) : null}

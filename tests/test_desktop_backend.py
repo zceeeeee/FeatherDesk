@@ -164,6 +164,7 @@ def test_missing_and_existing_zhihu_values_get_different_controls() -> None:
     assert missing["prompt_type"] == "input"
     assert missing["input_required"] is True
     assert missing["current_value"] is None
+    assert missing["default_value"] == "-1"
     assert existing["prompt_type"] == "confirm_value"
     assert existing["current_value"] == "测试标题"
     assert [action["id"] for action in existing["actions"]] == ["keep", "replace"]
@@ -178,6 +179,18 @@ def test_optional_prompt_exposes_its_default_value() -> None:
     assert prompt["prompt_type"] == "input"
     assert prompt["input_required"] is False
     assert prompt["default_value"] == "无需备注"
+
+
+def test_optional_prompt_field_default_is_not_replaced_by_detected_value() -> None:
+    prompt = parse_desktop_prompt(
+        "请输入 WPS 的「标题字体」。当前值：黑体。",
+        fields=[{"name": "标题字体", "required": False, "default_value": "宋体"}],
+    )
+
+    assert prompt["prompt_type"] == "input"
+    assert prompt["input_required"] is False
+    assert prompt["current_value"] == "黑体"
+    assert prompt["default_value"] == "宋体"
 
 
 def test_confirmation_resolution_preserves_selected_option(tmp_path) -> None:

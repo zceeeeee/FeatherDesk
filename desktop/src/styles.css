@@ -297,6 +297,8 @@ button { color: inherit; }
 .choice-list button strong { font-size: 13px; }
 .choice-list button small { color: #68767d; font-size: 11px; line-height: 16px; }
 .prompt-input { margin-top: 9px; }
+.input-choice-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 9px; }
+.default-value-button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
 .prompt-input label { display: block; margin-bottom: 5px; color: #514b35; font-size: 11px; font-weight: 600; }
 .required-indicator { color: inherit; }
 .required-alert { color: #d82020; animation: required-flash 520ms ease-in-out 3; }
