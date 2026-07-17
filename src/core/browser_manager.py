@@ -69,6 +69,65 @@ def _detect_chrome_path() -> str | None:
     return None
 
 
+def _detect_chrome_user_data() -> str | None:
+    """自动检测用户本地 Chrome 的 user-data-dir（包含书签、cookie、登录状态）。
+
+    返回 Chrome 默认 profile 路径，如果不存在则返回 None。
+    注意：Chrome 同一时间只能有一个实例使用同一个 user-data-dir，
+    如果用户的 Chrome 正在运行，需要用 --remote-debugging-port 重新启动。
+    """
+    import platform
+    from pathlib import Path
+
+    if platform.system() == "Windows":
+        candidates = [
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/User Data",
+        ]
+    elif platform.system() == "Darwin":
+        candidates = [
+            Path.home() / "Library/Application Support/Google/Chrome",
+        ]
+    else:  # Linux
+        candidates = [
+            Path.home() / ".config/google-chrome",
+        ]
+
+    for path in candidates:
+        if path.exists():
+            return str(path)
+    return None
+
+
+def _is_chrome_using_profile(user_data_dir: str, chrome_path: str) -> bool:
+    """检测 Chrome 是否正在使用指定的 user-data-dir。
+
+    通过检查 profile 目录的 lockfile 判断。
+    lockfile 存在 = Chrome 正在使用（不要删除它！）。
+    """
+    from pathlib import Path
+
+    profile_path = Path(user_data_dir)
+    if not profile_path.exists():
+        return False
+
+    # 检查 lockfile（Chrome 运行时会创建）
+    # 只检查是否存在，不要尝试删除！
+    lock_file = profile_path / "lockfile"
+    return lock_file.exists()
+
+
+def _is_port_in_use(port: int) -> bool:
+    """检测端口是否被占用。"""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 def _get_engine_type() -> str:
     """根据环境变量决定引擎类型。
 
@@ -332,31 +391,77 @@ class BrowserManager:
             if not auto_launch:
                 raise RuntimeError(
                     f"Chrome 未在端口 {port} 运行。请先手动启动 Chrome：\n"
-                    f'"{chrome_path}" --remote-debugging-port={port}'
+                    f'"{chrome_path}" --remote-debugging-port={port}\n\n'
+                    f"如果 Chrome 已在运行，请先关闭所有 Chrome 窗口后再试。"
                 )
 
             # 自动启动 Chrome
-            cmd = [chrome_path, f"--remote-debugging-port={port}"]
-            if user_data:
-                cmd.append(f"--user-data-dir={user_data}")
-            else:
-                # 使用独立的 profile 避免与用户正在使用的 Chrome 冲突
-                default_profile = str(
-                    Path.home() / ".agentic-playwright" / "chrome-profile"
-                )
-                cmd.append(f"--user-data-dir={default_profile}")
+            cmd = [
+                chrome_path,
+                f"--remote-debugging-port={port}",
+                "--no-first-run",           # 跳过首次运行向导
+                "--no-default-browser-check",  # 跳过默认浏览器检查
+                "--disable-popup-blocking",  # 禁用弹窗拦截（避免阻塞）
+                "--disable-default-apps",    # 禁用默认应用
+            ]
 
-            logger.info("Auto-launching Chrome with debug port %d", port)
+            # 确定 user-data-dir
+            if user_data:
+                # 用户显式指定了 user-data-dir
+                target_user_data = user_data
+                logger.info("Using configured user-data-dir: %s", user_data)
+            else:
+                # 尝试使用用户真实的 Chrome profile（包含书签、cookie、登录状态）
+                real_user_data = _detect_chrome_user_data()
+                if real_user_data:
+                    target_user_data = real_user_data
+                    logger.info(
+                        "Using detected Chrome user-data-dir: %s", real_user_data
+                    )
+                else:
+                    # 未检测到 Chrome profile，使用独立 profile
+                    target_user_data = str(
+                        Path.home() / ".agentic-playwright" / "chrome-profile"
+                    )
+                    logger.info("Using isolated profile: %s", target_user_data)
+
+            # 检测调试端口是否已被占用
+            if _is_port_in_use(port):
+                raise RuntimeError(
+                    f"端口 {port} 已被占用，无法启动 Chrome 调试模式。\n"
+                    f"请检查是否有其他程序在使用该端口，或在设置中更换调试端口。"
+                )
+
+            # 检测 Chrome 是否正在运行（使用同一个 profile 时会冲突）
+            if _is_chrome_using_profile(target_user_data, chrome_path):
+                raise RuntimeError(
+                    "检测到 Chrome 正在运行，无法使用同一个用户数据目录启动新实例。\n"
+                    "请先关闭所有 Chrome 窗口（包括后台进程），然后重试。\n\n"
+                    "提示：可以在任务管理器中检查是否有残留的 chrome.exe 进程。"
+                )
+
+            cmd.append(f"--user-data-dir={target_user_data}")
+
+            logger.info("Auto-launching Chrome: %s", " ".join(cmd))
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             # 等待 Chrome 启动
-            for _ in range(20):  # 最多等待 10 秒
+            for i in range(20):  # 最多等待 10 秒
                 time.sleep(0.5)
                 if _is_chrome_running_on_port():
+                    logger.info("Chrome debug port ready after %.1f seconds", (i + 1) * 0.5)
                     break
             else:
                 raise RuntimeError(
-                    "Chrome 启动超时，请检查路径是否正确或手动启动 Chrome"
+                    "Chrome 启动超时（调试端口未就绪）。\n\n"
+                    "可能原因：\n"
+                    "1. Chrome 弹出了对话框（如恢复页面提示），请检查并关闭\n"
+                    "2. 用户数据目录被其他 Chrome 实例占用\n"
+                    "3. Chrome 进程启动失败\n\n"
+                    "解决方法：\n"
+                    "1. 关闭所有 Chrome 窗口（包括后台进程）\n"
+                    "2. 在任务管理器中结束所有 chrome.exe 进程\n"
+                    "3. 重试任务"
                 )
 
         # 连接到 Chrome

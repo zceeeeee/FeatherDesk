@@ -138,7 +138,8 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
     useCloakBrowser: true,
     browserEngine: "cloakbrowser",
     localChromePath: "",
-    localChromeDebugPort: 9222
+    localChromeDebugPort: 9222,
+    localChromeUserData: ""
   });
   const [saved, setSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -246,11 +247,22 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
                   />
                   <small className="field-help">Chrome 远程调试端口，默认 9222</small>
                 </label>
+                <label>
+                  用户数据目录
+                  <input
+                    type="text"
+                    value={settings.localChromeUserData || ""}
+                    placeholder="留空则自动使用你的 Chrome 数据"
+                    onChange={(event) => setSettings({ ...settings, localChromeUserData: event.target.value })}
+                  />
+                  <small className="field-help">留空将自动使用你本地 Chrome 的书签、cookie 和登录状态。如需隔离可指定独立目录。</small>
+                </label>
                 <div className="local-chrome-hint">
                   <p><strong>使用方式：</strong></p>
                   <ul>
-                    <li><strong>自动启动</strong>：系统会自动启动 Chrome 并连接</li>
+                    <li><strong>自动启动</strong>：系统会自动启动 Chrome 并连接，使用你的真实 Chrome 数据</li>
                     <li><strong>手动启动</strong>：先运行 <code>chrome.exe --remote-debugging-port=9222</code>，再执行任务</li>
+                    <li><strong>注意</strong>：使用真实数据时需先关闭已运行的 Chrome</li>
                   </ul>
                 </div>
               </div>

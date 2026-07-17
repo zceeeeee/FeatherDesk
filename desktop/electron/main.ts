@@ -427,7 +427,7 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     env.LOCAL_CHROME_PATH = stored.localChromePath || "";
     env.LOCAL_CHROME_DEBUG_PORT = stored.localChromeDebugPort || "9222";
     env.LOCAL_CHROME_AUTO_LAUNCH = "true";
-    env.LOCAL_CHROME_USER_DATA = "";
+    env.LOCAL_CHROME_USER_DATA = stored.localChromeUserData || "";
   }
 
   if (provider === "anthropic") {
@@ -617,7 +617,8 @@ function registerIpc(): void {
       apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : "",
       browserEngine: String(browserEngine),
       localChromePath: String(settings.localChromePath || ""),
-      localChromeDebugPort: Number(settings.localChromeDebugPort || "9222")
+      localChromeDebugPort: Number(settings.localChromeDebugPort || "9222"),
+      localChromeUserData: String(settings.localChromeUserData || "")
     };
   });
   ipcMain.handle("settings:save", async (_event, incoming: Record<string, unknown>) => {
@@ -644,6 +645,7 @@ function registerIpc(): void {
     if (browserEngine === "local_chrome") {
       existing.localChromePath = String(incoming.localChromePath || "");
       existing.localChromeDebugPort = String(incoming.localChromeDebugPort || "9222");
+      existing.localChromeUserData = String(incoming.localChromeUserData || "");
       existing.useCloakBrowser = "false";
     } else {
       // 非本地 Chrome 时，根据引擎类型设置 useCloakBrowser
