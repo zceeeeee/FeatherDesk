@@ -575,6 +575,7 @@ class SkillRouter:
             "            '要求结构清晰、表达自然，可直接放入 WPS 文档；如有主送机关，正文须从主送机关的下一行开始。'\n"
             "            '请直接输出 Markdown 正文，不要输出一级标题、说明或 Markdown 代码块。'\n"
             "            '正文应使用 ## 表示一级标题、### 表示二级标题；关键观点可加粗（**文字**），重点短语可斜体（*文字*），并可使用有序或无序列表。'\n"
+            "            '下划线使用 <u>文字</u>；彩色文字使用 <span style=\"color:#RRGGBB\">文字</span>，这些格式可以与加粗、斜体嵌套。'\n"
             "        )\n"
             "        try:\n"
             "            return __agentic_generate_text(prompt, 'WPS正文')\n"

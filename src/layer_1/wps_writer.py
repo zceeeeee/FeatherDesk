@@ -144,6 +144,14 @@ def _font_color_value(value: int | str | None) -> int | None:
     for name, color in WORD_COLOR_VALUES.items():
         if name.lower() in lowered:
             return color
+    rgb_match = re.search(
+        r"rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)",
+        text,
+        re.IGNORECASE,
+    )
+    if rgb_match:
+        red, green, blue = (min(255, int(value)) for value in rgb_match.groups())
+        return red + (green << 8) + (blue << 16)
     hex_match = re.search(r"#?([0-9a-fA-F]{6})", text)
     if hex_match:
         rgb = int(hex_match.group(1), 16)
@@ -254,6 +262,7 @@ def _set_font(
     size: int,
     bold: bool,
     italic: bool = False,
+    underline: bool = False,
     color: int | None = None,
 ) -> None:
     font = getattr(selection, "Font", None)
@@ -263,6 +272,7 @@ def _set_font(
     _set_attr(font, "Size", size)
     _set_attr(font, "Bold", -1 if bold else 0)
     _set_attr(font, "Italic", -1 if italic else 0)
+    _set_attr(font, "Underline", 1 if underline else 0)
     if color is not None:
         _set_attr(font, "Color", color)
 
@@ -311,46 +321,99 @@ def _type_paragraph(selection: Any, text: str, numbered: bool = False) -> None:
 
 
 def _markdown_inline_segments(text: str) -> list[dict[str, Any]]:
-    """Parse a small Markdown inline subset into styled text segments."""
+    """Parse supported Markdown and inline HTML into nested style segments."""
 
-    segments: list[dict[str, Any]] = []
-    pattern = re.compile(
-        r"(\*\*\*.+?\*\*\*|\*\*.+?\*\*|__.+?__|\*[^*\n]+?\*|_[^_\n]+?_)",
-        re.DOTALL,
+    patterns = (
+        ("underline", re.compile(r"<u\b[^>]*>(.*?)</u\s*>", re.IGNORECASE | re.DOTALL)),
+        (
+            "span_color",
+            re.compile(
+                r"(<span\b[^>]*\bstyle\s*=\s*['\"][^'\"]*\bcolor\s*:[^'\"]*['\"][^>]*>)(.*?)</span\s*>",
+                re.IGNORECASE | re.DOTALL,
+            ),
+        ),
+        (
+            "font_color",
+            re.compile(
+                r"(<font\b[^>]*\bcolor\s*=\s*(?:['\"][^'\"]+['\"]|[^\s>]+)[^>]*>)(.*?)</font\s*>",
+                re.IGNORECASE | re.DOTALL,
+            ),
+        ),
+        ("bold_italic", re.compile(r"\*\*\*(.+?)\*\*\*", re.DOTALL)),
+        ("bold", re.compile(r"\*\*(.+?)\*\*", re.DOTALL)),
+        ("bold_underscore", re.compile(r"__(.+?)__", re.DOTALL)),
+        ("italic", re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")),
+        ("italic_underscore", re.compile(r"(?<!_)_([^_\n]+?)_(?!_)")),
     )
-    cursor = 0
-    for match in pattern.finditer(text):
-        if match.start() > cursor:
-            segments.append({"text": text[cursor : match.start()], "bold": False, "italic": False})
 
-        token = match.group(0)
-        bold = False
-        italic = False
-        if token.startswith("***") and token.endswith("***"):
-            inner = token[3:-3]
-            bold = True
-            italic = True
-        elif token.startswith("**") and token.endswith("**"):
-            inner = token[2:-2]
-            bold = True
-        elif token.startswith("__") and token.endswith("__"):
-            inner = token[2:-2]
-            bold = True
+    def parse_color(opening_tag: str) -> int | None:
+        match = re.search(r"\bcolor\s*:\s*([^;'\"]+)", opening_tag, re.IGNORECASE)
+        if not match:
+            match = re.search(
+                r"\bcolor\s*=\s*['\"]?([^'\"\s>]+)",
+                opening_tag,
+                re.IGNORECASE,
+            )
+        return _font_color_value(match.group(1)) if match else None
+
+    def append_segment(
+        target: list[dict[str, Any]], content: str, style: dict[str, Any]
+    ) -> None:
+        if not content:
+            return
+        segment = {"text": content, **style}
+        if target and all(
+            target[-1].get(key) == segment.get(key)
+            for key in ("bold", "italic", "underline", "color")
+        ):
+            target[-1]["text"] += content
         else:
-            inner = token[1:-1]
-            # Markdown single-star normally means italic. The special Chinese
-            # word "加粗" is treated as bold for common natural-language tasks.
-            if "加粗" in inner and "斜体" not in inner:
-                bold = True
-            else:
-                italic = True
-        if inner:
-            segments.append({"text": inner, "bold": bold, "italic": italic})
-        cursor = match.end()
+            target.append(segment)
 
-    if cursor < len(text):
-        segments.append({"text": text[cursor:], "bold": False, "italic": False})
-    return [segment for segment in segments if segment["text"]]
+    def parse(value: str, inherited: dict[str, Any]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        cursor = 0
+        while cursor < len(value):
+            candidates = []
+            for priority, (kind, pattern) in enumerate(patterns):
+                match = pattern.search(value, cursor)
+                if match:
+                    candidates.append((match.start(), priority, kind, match))
+            if not candidates:
+                append_segment(result, value[cursor:], inherited)
+                break
+
+            _, _, kind, match = min(candidates, key=lambda item: (item[0], item[1]))
+            append_segment(result, value[cursor : match.start()], inherited)
+            nested_style = dict(inherited)
+            if kind == "underline":
+                nested_style["underline"] = True
+                inner = match.group(1)
+            elif kind in {"span_color", "font_color"}:
+                parsed_color = parse_color(match.group(1))
+                if parsed_color is not None:
+                    nested_style["color"] = parsed_color
+                inner = match.group(2)
+            elif kind == "bold_italic":
+                nested_style["bold"] = True
+                nested_style["italic"] = True
+                inner = match.group(1)
+            elif kind in {"bold", "bold_underscore"}:
+                nested_style["bold"] = True
+                inner = match.group(1)
+            else:
+                nested_style["italic"] = True
+                inner = match.group(1)
+
+            for segment in parse(inner, nested_style):
+                append_segment(result, segment["text"], segment)
+            cursor = match.end()
+        return result
+
+    return parse(
+        text,
+        {"bold": False, "italic": False, "underline": False, "color": None},
+    )
 
 
 def _type_rich_paragraph(
@@ -372,7 +435,9 @@ def _type_rich_paragraph(
     for segment in _markdown_inline_segments(text):
         segment_bold = bool(segment.get("bold"))
         segment_italic = bool(segment.get("italic"))
-        if segment_bold or segment_italic:
+        segment_underline = bool(segment.get("underline"))
+        segment_color = segment.get("color")
+        if segment_bold or segment_italic or segment_underline or segment_color is not None:
             inline_styles += 1
         _set_font(
             selection,
@@ -380,7 +445,8 @@ def _type_rich_paragraph(
             size,
             bold or segment_bold,
             italic=italic or segment_italic,
-            color=color,
+            underline=segment_underline,
+            color=segment_color if segment_color is not None else color,
         )
         _call(selection, "TypeText", segment["text"])
     _call(selection, "TypeParagraph")

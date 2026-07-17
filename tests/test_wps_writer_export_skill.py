@@ -40,7 +40,9 @@ class FakeInlineShapes:
 
 class FakeSelection:
     def __init__(self) -> None:
-        self.Font = SimpleNamespace(Name="", Size=0, Bold=0, Italic=0, Color=None)
+        self.Font = SimpleNamespace(
+            Name="", Size=0, Bold=0, Italic=0, Underline=0, Color=None
+        )
         self.ParagraphFormat = SimpleNamespace(
             Alignment=None,
             FirstLineIndent=None,
@@ -60,6 +62,7 @@ class FakeSelection:
                 "size": self.Font.Size,
                 "bold": self.Font.Bold,
                 "italic": self.Font.Italic,
+                "underline": self.Font.Underline,
                 "color": self.Font.Color,
             }
         )
@@ -259,6 +262,37 @@ def test_export_generated_markdown_body_applies_inline_styles(tmp_path):
     italic = next(item for item in app.Selection.formatted if item["text"] == "斜体内容")
     assert bold["bold"] == -1
     assert italic["italic"] == -1
+
+
+def test_export_markdown_supports_nested_underline_and_font_colors(tmp_path):
+    app = FakeApplication()
+
+    result = export_article_to_pdf(
+        title="Styled article",
+        body=(
+            "**<u>*World Cup*</u>** and "
+            '<span style="color:#FF0000">red text</span> and '
+            '<font color="blue"><u>blue underline</u></font>'
+        ),
+        body_format="markdown",
+        output_dir=str(tmp_path),
+        keep_open=True,
+        visible=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["success"] is True
+    combined = next(item for item in app.Selection.formatted if item["text"] == "World Cup")
+    red = next(item for item in app.Selection.formatted if item["text"] == "red text")
+    blue = next(
+        item for item in app.Selection.formatted if item["text"] == "blue underline"
+    )
+    assert combined["bold"] == -1
+    assert combined["italic"] == -1
+    assert combined["underline"] == 1
+    assert red["color"] == 255
+    assert blue["color"] == 16711680
+    assert blue["underline"] == 1
 
 
 def test_skill_run_calls_registered_export_function():
