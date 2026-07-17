@@ -420,3 +420,87 @@ test("background confirmation does not pause or disappear when task succeeds", (
   assert.equal(useAgentStore.getState().currentTaskId, null);
   assert.equal(useAgentStore.getState().confirmations[0]?.status, "pending");
 });
+
+test("failed task returns the pet to idle after ten seconds", () => {
+  installDesktopBridge();
+  let scheduled: (() => void) | null = null;
+  let delay = 0;
+  window.setTimeout = ((callback: TimerHandler, timeout?: number) => {
+    assert.equal(typeof callback, "function");
+    scheduled = callback as () => void;
+    delay = timeout ?? 0;
+    return 101;
+  }) as typeof window.setTimeout;
+  window.clearTimeout = (() => undefined) as typeof window.clearTimeout;
+  useAgentStore.setState({
+    currentConversationId: "conversation-error",
+    currentTaskId: "task-error",
+    visualState: "running"
+  });
+
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "task-error-failed",
+    type: "task_failed",
+    task_id: "task-error",
+    conversation_id: "conversation-error",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    payload: {}
+  });
+
+  assert.equal(useAgentStore.getState().visualState, "error");
+  assert.equal(useAgentStore.getState().currentTaskId, null);
+  assert.equal(delay, 10_000);
+  assert.ok(scheduled);
+  (scheduled as () => void)();
+  assert.equal(useAgentStore.getState().visualState, "idle");
+});
+
+test("stale error timeout cannot overwrite a newly started task", () => {
+  installDesktopBridge();
+  let scheduled: (() => void) | null = null;
+  window.setTimeout = ((callback: TimerHandler) => {
+    assert.equal(typeof callback, "function");
+    scheduled = callback as () => void;
+    return 102;
+  }) as typeof window.setTimeout;
+  window.clearTimeout = (() => undefined) as typeof window.clearTimeout;
+  useAgentStore.setState({
+    currentConversationId: "conversation-error",
+    currentTaskId: "task-error",
+    visualState: "running"
+  });
+
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "agent-error-state",
+    type: "agent_state_changed",
+    task_id: "task-error",
+    conversation_id: "conversation-error",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    payload: { state: "error" }
+  });
+  assert.equal(useAgentStore.getState().visualState, "error");
+  assert.ok(scheduled);
+  const staleTimeout = scheduled as () => void;
+
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "task-error-failed",
+    type: "task_failed",
+    task_id: "task-error",
+    conversation_id: "conversation-error",
+    timestamp: "2026-01-01T00:00:00.500Z",
+    payload: {}
+  });
+
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "task-next-started",
+    type: "task_started",
+    task_id: "task-next",
+    conversation_id: "conversation-error",
+    timestamp: "2026-01-01T00:00:01.000Z",
+    payload: {}
+  });
+  staleTimeout();
+
+  assert.equal(useAgentStore.getState().currentTaskId, "task-next");
+  assert.equal(useAgentStore.getState().visualState, "running");
+});

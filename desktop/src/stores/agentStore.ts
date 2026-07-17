@@ -44,10 +44,26 @@ interface AgentStore {
 let socket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let conversationSyncTimer: number | null = null;
+let errorVisualStateTimer: number | null = null;
 let pendingConversationId: string | null = null;
 const seenEvents = new Set<string>();
 const supersededTaskIds = new Set<string>();
 const activeTaskStatuses = new Set(["queued", "running", "waiting_confirmation"]);
+const ERROR_VISUAL_STATE_DURATION_MS = 10_000;
+
+function cancelErrorVisualStateReset(): void {
+  if (errorVisualStateTimer === null) return;
+  window.clearTimeout(errorVisualStateTimer);
+  errorVisualStateTimer = null;
+}
+
+function scheduleErrorVisualStateReset(reset: () => void): void {
+  cancelErrorVisualStateReset();
+  errorVisualStateTimer = window.setTimeout(() => {
+    errorVisualStateTimer = null;
+    reset();
+  }, ERROR_VISUAL_STATE_DURATION_MS);
+}
 
 interface TaskSummary {
   id: string;
@@ -454,7 +470,10 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     await apiRequest(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   },
 
-  clearError: () => set({ visualState: "idle" }),
+  clearError: () => {
+    cancelErrorVisualStateReset();
+    set({ visualState: "idle" });
+  },
 
   handleBackendEvent: (event) => {
     const state = get();
@@ -462,27 +481,46 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     if (event.task_id && supersededTaskIds.has(event.task_id)) return;
     if (event.type === "agent_state_changed") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
-      set({ visualState: event.payload.state as AgentVisualState });
+      const visualState = event.payload.state as AgentVisualState;
+      cancelErrorVisualStateReset();
+      set({ visualState });
+      if (visualState === "error") {
+        scheduleErrorVisualStateReset(() => {
+          if (get().visualState === "error") set({ visualState: "idle" });
+        });
+      }
       return;
     }
     if (event.type === "task_created") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
+      cancelErrorVisualStateReset();
       set({ currentTaskId: event.task_id || null, visualState: "running" });
       return;
     }
     if (event.type === "task_started") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
+      cancelErrorVisualStateReset();
       set({ currentTaskId: event.task_id || null, visualState: "running" });
       return;
     }
     if (event.type === "task_cancelled") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
+      cancelErrorVisualStateReset();
       set({ currentTaskId: null, visualState: "idle" });
       return;
     }
-    if (event.type === "task_succeeded" || event.type === "task_failed") {
+    if (event.type === "task_succeeded") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
+      cancelErrorVisualStateReset();
       set({ currentTaskId: null });
+    }
+    if (event.type === "task_failed") {
+      if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
+      set({ currentTaskId: null, visualState: "error" });
+      scheduleErrorVisualStateReset(() => {
+        if (get().visualState === "error") set({ visualState: "idle" });
+      });
+      return;
     }
     if (event.type === "assistant_message") {
       const incoming = event.payload.message as ChatMessage;
