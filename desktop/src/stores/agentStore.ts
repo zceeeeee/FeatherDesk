@@ -468,6 +468,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     const taskId = explicitTaskId || get().currentTaskId;
     if (!taskId) return;
     await apiRequest(`/api/tasks/${taskId}/cancel`, { method: "POST" });
+    // 乐观更新：立即反馈，后端会在检查点自行停止
+    cancelErrorVisualStateReset();
+    set({ currentTaskId: null, visualState: "idle" });
   },
 
   clearError: () => {
