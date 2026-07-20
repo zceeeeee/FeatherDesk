@@ -97,10 +97,14 @@ class LLMClient:
     提供两个核心方法:
       - chat(prompt)      → str   自由文本回复
       - chat_json(prompt) → dict  结构化 JSON 输出
+
+    支持取消: 调用 cancel() 会关闭底层 HTTP 客户端，使正在执行的请求立即失败。
     """
 
     def __init__(self, config: LLMConfig | None = None) -> None:
         self._config = config or LLMConfig.from_env()
+        self._http_client: Any = None  # 延迟初始化的 httpx.Client
+        self._cancelled = False
 
     @property
     def available(self) -> bool:
@@ -212,6 +216,10 @@ class LLMClient:
     # OpenAI 兼容 API
     # -------------------------------------------------------------------
 
+    def _is_mimo(self) -> bool:
+        """判断是否为 mimo 模型。"""
+        return "mimo" in self._config.model.lower()
+
     def _call_openai(
         self, prompt: str, system_prompt: str | None, temperature: float, max_tokens: int
     ) -> str:
@@ -226,13 +234,23 @@ class LLMClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        payload = {
+        payload: dict = {
             "model": cfg.model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
             "messages": messages,
-            "thinking": {"type": "enabled" if cfg.thinking_enabled else "disabled"},
         }
+
+        if self._is_mimo():
+            # mimo 不支持自定义 temperature/top_p，使用 max_completion_tokens
+            payload["max_completion_tokens"] = max_tokens
+            if cfg.thinking_enabled:
+                payload["thinking"] = {"type": "enabled"}
+        else:
+            # 标准 OpenAI 兼容格式
+            payload["temperature"] = temperature
+            payload["max_tokens"] = max_tokens
+            if cfg.thinking_enabled:
+                payload["thinking"] = {"type": "enabled"}
+
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
             "Content-Type": "application/json",
@@ -277,14 +295,21 @@ class LLMClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        payload = {
+        payload: dict = {
             "model": cfg.model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
             "messages": messages,
             "response_format": {"type": "json_object"},
-            "thinking": {"type": "enabled" if cfg.thinking_enabled else "disabled"},
         }
+
+        if self._is_mimo():
+            payload["max_completion_tokens"] = max_tokens
+            if cfg.thinking_enabled:
+                payload["thinking"] = {"type": "enabled"}
+        else:
+            payload["temperature"] = temperature
+            payload["max_tokens"] = max_tokens
+            if cfg.thinking_enabled:
+                payload["thinking"] = {"type": "enabled"}
 
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",

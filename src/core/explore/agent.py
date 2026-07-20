@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from src.core.browser_manager import get_browser_manager
@@ -69,10 +69,12 @@ class ExploreAgent:
         config: ExploreConfig | None = None,
         experience_manager: ExploreExperienceManager | None = None,
         browser_manager_getter=None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self._llm_parser = llm_parser
         self._browser_manager_getter = browser_manager_getter or get_browser_manager
         self._config = config or self.build_config()
+        self._cancel_check = cancel_check
         self._snapshot_gen: SnapshotGenerator | None = SnapshotGenerator(self._config)
         self._executor: ExploreExecutor | None = None
         if experience_manager is None:
@@ -870,6 +872,7 @@ class ExploreAgent:
                 self._snapshot_generator(),
                 self._config,
                 browser_manager=bm,
+                cancel_check=self._cancel_check,
             )
         return self._executor
 

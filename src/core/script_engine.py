@@ -95,6 +95,16 @@ class ScriptEngine:
     def __init__(self, browser_manager: Any | None = None) -> None:
         self._browser_manager = browser_manager
         self._extra_globals: dict[str, Any] = {}
+        self._cancel_check: Callable[[], bool] | None = None
+
+    def register_cancel_check(self, cancel_check: Callable[[], bool] | None) -> None:
+        """注册取消检查回调。"""
+        self._cancel_check = cancel_check
+
+    def _raise_if_cancelled(self) -> None:
+        """检查取消信号，若已取消则抛出 TaskCancelledError。"""
+        if self._cancel_check is not None and self._cancel_check():
+            raise RuntimeError("任务已取消")
 
     def register_function(self, name: str, func: Callable) -> None:
         """注册一个函数到脚本命名空间。
@@ -151,6 +161,7 @@ class ScriptEngine:
 
         try:
             sys.stdout = output_buffer
+            self._raise_if_cancelled()
             exec(script_code, namespace)  # noqa: S102
 
             # 尝试获取脚本的返回值（如果有 return 语句，exec 不会捕获）
@@ -427,6 +438,7 @@ class ScriptEngine:
                 log(f"Wait for {domain} login on current page")
 
             while True:
+                self._raise_if_cancelled()
                 if _storage_state_logged_in(domain):
                     log(f"{domain} login detected")
                     return True
