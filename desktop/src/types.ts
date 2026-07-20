@@ -126,6 +126,12 @@ export interface DesktopSettings {
   useCloakBrowser: boolean;
 }
 
+export interface ApiConnectionTestResult {
+  ok: boolean;
+  message: string;
+  elapsedMs: number;
+}
+
 export interface DesktopBridge {
   expandChat(): Promise<void>;
   collapseChat(): Promise<void>;
@@ -146,6 +152,7 @@ export interface DesktopBridge {
   setActiveConversation(conversationId: string): Promise<string>;
   getSettings(): Promise<DesktopSettings>;
   saveSettings(settings: DesktopSettings): Promise<{ ok: boolean; apiKeyMasked: string }>;
+  testApiConnection(settings: DesktopSettings): Promise<ApiConnectionTestResult>;
   getAppearancePreferences(): Promise<AppearancePreferences>;
   updateAppearancePreferences(
     patch: AppearanceUpdatePatch,

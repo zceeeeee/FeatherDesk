@@ -41,5 +41,6 @@ export async function eventSocket(): Promise<WebSocket> {
 
 export const desktopSettings = {
   get: () => window.desktopAgent.getSettings(),
-  save: (settings: DesktopSettings) => window.desktopAgent.saveSettings(settings)
+  save: (settings: DesktopSettings) => window.desktopAgent.saveSettings(settings),
+  test: (settings: DesktopSettings) => window.desktopAgent.testApiConnection(settings)
 };

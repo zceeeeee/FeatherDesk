@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("desktopAgent", {
   setActiveConversation: (conversationId: string) => ipcRenderer.invoke("conversation:set-active", conversationId),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings: Record<string, unknown>) => ipcRenderer.invoke("settings:save", settings),
+  testApiConnection: (settings: Record<string, unknown>) =>
+    ipcRenderer.invoke("settings:test-connection", settings),
   getAppearancePreferences: () => ipcRenderer.invoke("appearance:get-preferences"),
   updateAppearancePreferences: (
     patch: AppearanceUpdatePatch,

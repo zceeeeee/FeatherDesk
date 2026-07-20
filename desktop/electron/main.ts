@@ -36,6 +36,7 @@ import {
 import { applyAlwaysOnTopToWindow } from "./windowBehavior.js";
 import { forwardUtf8Logs, withUtf8PythonEnvironment } from "./backendLogging.js";
 import { APP_DASHBOARD_TITLE, APP_ID, APP_NAME } from "./branding.js";
+import { testApiConnection } from "./apiConnectivity.js";
 
 const COMPACT_SIZE = 80;
 
@@ -610,6 +611,16 @@ function registerIpc(): void {
       apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : ""
     };
   });
+  ipcMain.handle(
+    "settings:test-connection",
+    (_event, incoming: Record<string, unknown>) => testApiConnection({
+      provider: String(incoming.provider || "openai"),
+      apiKey: String(incoming.apiKey || ""),
+      baseUrl: String(incoming.baseUrl || ""),
+      model: String(incoming.model || ""),
+      requestTimeout: Number(incoming.requestTimeout ?? 60)
+    })
+  );
   ipcMain.handle("settings:save", async (_event, incoming: Record<string, unknown>) => {
     const existing = readJson<Record<string, string>>(userFile("settings.json"), {});
     const apiKey = String(incoming.apiKey || "").trim();
