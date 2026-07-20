@@ -58,6 +58,15 @@ logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# 取消异常
+# ---------------------------------------------------------------------------
+
+
+class TaskCancelledError(Exception):
+    """用户取消任务时抛出，用于在步骤内部快速中断耗时操作。"""
+
+
+# ---------------------------------------------------------------------------
 # LLM 调用适配器 —— 让 SkillRouter 复用 LLMIntentParser 的 HTTP 能力
 # ---------------------------------------------------------------------------
 
@@ -186,6 +195,11 @@ class AgentLoop:
         self._llm_parser: LLMIntentParser | None = None
         self._task_splitter: TaskSplitter | None = None
         self._explore_agent: ExploreAgent | None = None
+
+    def _raise_if_cancelled(self) -> None:
+        """检查取消信号，若已取消则抛出 TaskCancelledError。"""
+        if self._cancel_check is not None and self._cancel_check():
+            raise TaskCancelledError("任务已取消")
 
     def run(self, task: str) -> AgentTaskResult:
         """执行一个自然语言任务。
@@ -461,6 +475,11 @@ class AgentLoop:
                                 pending_actions = None
                                 pending_mode = ""
                             state = self._do_act(step)
+                    except TaskCancelledError:
+                        result.error = "任务已取消"
+                        state = AgentState.FAILED
+                        logger.info("Agent task cancelled during step execution")
+                        break
                     except Exception as exc:
                         step.success = False
                         step.error = f"{type(exc).__name__}: {exc}"
@@ -527,6 +546,7 @@ class AgentLoop:
         if self._script_engine is None:
             self._script_engine = get_script_engine()
             self._script_engine.register_functions(get_controls_exports())
+        self._script_engine.register_cancel_check(self._cancel_check)
 
         if self._llm_parser is None:
             self._llm_parser = get_llm_intent_parser()
@@ -556,6 +576,7 @@ class AgentLoop:
             self._explore_agent = ExploreAgent(
                 self._llm_parser,
                 browser_manager_getter=lambda: get_browser_manager(),
+                cancel_check=self._cancel_check,
             )
         else:
             self._explore_agent.update_llm_parser(self._llm_parser)
@@ -693,6 +714,7 @@ class AgentLoop:
             return AgentState.FAILED
 
         page = get_browser_manager().get_page()
+        self._raise_if_cancelled()
 
         try:
             with log_timing("agent_observe_dom") as meta:
@@ -826,6 +848,7 @@ class AgentLoop:
             return AgentState.EXPLORE
 
         # ── 1. SkillRouter 召回+精排 ──
+        self._raise_if_cancelled()
         with log_timing("agent_plan_skill_router") as meta:
             if self._desktop_only:
                 page_context = {"url": "", "title": "Desktop task"}
@@ -945,6 +968,7 @@ class AgentLoop:
             )
             experience = None
 
+        self._raise_if_cancelled()
         bootstrap_url = self._bootstrap_explore_entry_page(task)
         if bootstrap_url:
             step.action = "Explore 前打开目标网页"
@@ -987,6 +1011,7 @@ class AgentLoop:
 
         # ── 4. Explore 模式 ──
         if explore_agent.has_pending_snapshot:
+            self._raise_if_cancelled()
             batch = explore_agent.plan_actions(task)
             completion_state = self._complete_explore_plan(step, batch)
             if completion_state is not None:
@@ -1693,6 +1718,7 @@ class AgentLoop:
         }
 
         try:
+            self._raise_if_cancelled()
             data = chat_json_with_retry(
                 self._llm_parser._client,
                 prompt,
@@ -1731,6 +1757,7 @@ class AgentLoop:
         if not self._llm_parser:
             return None
 
+        self._raise_if_cancelled()
         intent = self._llm_parser.parse(task)
         if not intent:
             return None
@@ -1768,6 +1795,7 @@ class AgentLoop:
         )
 
         try:
+            self._raise_if_cancelled()
             raw = self._llm_parser._client.chat(match_prompt)
             chosen_id = self._extract_skill_id(raw, all_skills)
 
@@ -1835,6 +1863,7 @@ class AgentLoop:
                     "优先调用 panel_show/panel_prompt 或 panel_set_fields 询问用户，"
                     "不要静默失败。panel_prompt 的问题可以包含 [选项] [选项] 生成快捷选择。\n"
                 )
+                self._raise_if_cancelled()
                 script = self._llm_parser._client.chat(modify_prompt).strip()
 
                 # 去掉可能的代码块标记
@@ -1942,6 +1971,7 @@ class AgentLoop:
         # Allow hooks to modify the script
         script_to_run = before_event.data.get("script", step.script)
 
+        self._raise_if_cancelled()
         with log_timing("agent_act_execute") as meta:
             result = self._script_engine.execute(script_to_run)
             meta["script_length"] = len(script_to_run)
@@ -1997,6 +2027,7 @@ class AgentLoop:
 
     def _do_explore_act(self, step: AgentStep) -> AgentState:
         """Execute Explore actions."""
+        self._raise_if_cancelled()
         explore_agent = self._ensure_explore_agent()
         state = explore_agent.execute(
             step,
@@ -2064,6 +2095,7 @@ class AgentLoop:
             return AgentState.FAILED
 
         try:
+            self._raise_if_cancelled()
             with log_timing("agent_heal_vision") as meta:
                 analysis = self._vision.analyze_page(
                     question="找到页面上可以点击的按钮或链接"
@@ -2082,6 +2114,7 @@ class AgentLoop:
                     selector = elem.suggested_selector
                     heal_script = f"click({json.dumps(selector, ensure_ascii=False)})\nwait(1)"
                     assert self._script_engine is not None
+                    self._raise_if_cancelled()
                     heal_result = self._script_engine.execute(heal_script)
                     if heal_result.success:
                         step.success = True

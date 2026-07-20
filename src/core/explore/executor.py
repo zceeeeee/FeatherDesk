@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import ValidationError
 
@@ -92,11 +92,13 @@ class ExploreExecutor:
         snapshot_generator: Any | None = None,
         config: Any = None,
         browser_manager: Any | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self._page = page
         self._snapshot_gen = snapshot_generator
         self._config = config
         self._browser_manager = browser_manager
+        self._cancel_check = cancel_check
         self._current_snapshot: SnapshotResponse | None = None
         self._valid_refs: set[str] = set()
         self._ref_locator_cache: dict[str, Any] = {}
@@ -113,6 +115,11 @@ class ExploreExecutor:
             enabled=False,
         )
 
+    def _raise_if_cancelled(self) -> None:
+        """检查取消信号，若已取消则抛出异常。"""
+        if self._cancel_check is not None and self._cancel_check():
+            raise RuntimeError("任务已取消")
+
     def execute(self, batch: ActionBatch | dict[str, Any]) -> ExecutionResult:
         """Execute an action batch and stop on the first failure."""
 
@@ -128,6 +135,7 @@ class ExploreExecutor:
             terminator_idx = self._find_terminator(batch.actions)
             last_idx = terminator_idx if terminator_idx is not None else len(batch.actions) - 1
             for action in batch.actions[: last_idx + 1]:
+                self._raise_if_cancelled()
                 result = self._execute_single(action)
                 results.append(result)
                 if not result.success:

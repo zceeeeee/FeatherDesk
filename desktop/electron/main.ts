@@ -420,6 +420,8 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     ...process.env,
     DESKTOP_AGENT_TOKEN: backendToken,
     LLM_PROVIDER: provider,
+    LLM_TIMEOUT: stored.requestTimeout || "60",
+    LLM_MAX_TOKENS: stored.maxTokens || "4096",
     BROWSER_HEADLESS: stored.browserHeadless || "false",
     DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",
     USE_CLOAKBROWSER: stored.useCloakBrowser || "true"
@@ -550,7 +552,7 @@ function registerIpc(): void {
   ipcMain.handle("pet:collapse", () => collapsePet());
   ipcMain.handle("pet:is-expanded", () => expanded);
   ipcMain.handle("pet:show-menu", () => showPetMenu());
-  ipcMain.handle("dashboard:open", (_event, section: unknown) => createDashboardWindow(normalizeDashboardSection(section)));
+  ipcMain.handle("dashboard:open", (_event, section: unknown) => { createDashboardWindow(normalizeDashboardSection(section)); });
   ipcMain.handle("window:get-bounds", (event) => BrowserWindow.fromWebContents(event.sender)?.getBounds());
   ipcMain.handle(
     "pet:resize-expanded",
