@@ -112,6 +112,22 @@ class LLMClient:
         """当前使用的模型名称。"""
         return self._config.model
 
+    @property
+    def supports_vision(self) -> bool:
+        """Return an explicit, conservative multimodal capability decision."""
+        override = os.getenv("LLM_SUPPORTS_VISION", "auto").strip().lower()
+        if override in {"1", "true", "yes", "on"}:
+            return True
+        if override in {"0", "false", "no", "off"}:
+            return False
+
+        model = self._config.model.strip().lower()
+        if self._config.provider == "anthropic":
+            return model.startswith(("claude-3", "claude-sonnet-4", "claude-opus-4"))
+        # Keep unknown OpenAI-compatible models disabled. In particular,
+        # mimo-v2.5-pro is text-only and must never be inferred as visual.
+        return model.startswith(("gpt-4o", "gpt-4.1", "gpt-5"))
+
     # -------------------------------------------------------------------
     # 接口 1: 自由文本对话
     # -------------------------------------------------------------------

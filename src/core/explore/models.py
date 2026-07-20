@@ -40,6 +40,7 @@ class ActionType(str, Enum):
     EVALUATE = "evaluate"
     PAUSE_FOR_INPUT = "pause_for_input"
     CLICK_AT = "click_at"
+    HOVER_AT = "hover_at"
     TYPE = "type"
     DIALOG = "dialog"
     REQUEST_DEEP_SCAN = "request_deep_scan"
@@ -81,6 +82,42 @@ class AriaNode(BaseModel):
     children: list["AriaNode"] = Field(default_factory=list)
 
 
+class SurfaceStats(BaseModel):
+    """Visible rendering surface statistics used by the vision gate."""
+
+    viewport_width: int = 0
+    viewport_height: int = 0
+    canvas_count: int = 0
+    webgl_count: int = 0
+    iframe_count: int = 0
+    visible_canvas_area_ratio: float = 0.0
+
+
+class ScreenshotMeta(BaseModel):
+    """Metadata binding visual coordinates to a specific page state."""
+
+    url: str = ""
+    viewport_width: int = 0
+    viewport_height: int = 0
+    scroll_x: float = 0.0
+    scroll_y: float = 0.0
+    navigation_epoch: int = 0
+    captured_at: datetime = Field(default_factory=datetime.now)
+
+
+class VisualTarget(BaseModel):
+    """Untrusted visual target normalized to the screenshot viewport."""
+
+    ref: str = Field(..., pattern=r"^v\d+$")
+    description: str = ""
+    role: str = ""
+    x: float = Field(..., ge=0.0, le=1.0)
+    y: float = Field(..., ge=0.0, le=1.0)
+    width: float = Field(..., ge=0.0, le=1.0)
+    height: float = Field(..., ge=0.0, le=1.0)
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+
+
 class SnapshotResponse(BaseModel):
     """ARIA snapshot response."""
 
@@ -92,6 +129,12 @@ class SnapshotResponse(BaseModel):
     interactive_count: int = 0
     has_modal: bool = False
     deep_scanned: bool = Field(False, description="是否经过深度扫描")
+    aria_quality: float = Field(1.0, ge=0.0, le=1.0)
+    surface_stats: SurfaceStats = Field(default_factory=SurfaceStats)
+    vision_enhanced: bool = False
+    visual_summary: str = ""
+    visual_targets: list[VisualTarget] = Field(default_factory=list)
+    screenshot_meta: Optional[ScreenshotMeta] = None
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
@@ -149,6 +192,8 @@ class ActionBatch(BaseModel):
     task_id: Optional[str] = None
     plan_intent: Optional[str] = Field(None, description="本批次的整体意图描述")
     steps_description: Optional[str] = Field(None, description="步骤说明")
+    need_vision: bool = Field(False, description="Whether text planning requests vision")
+    vision_reason: Optional[str] = None
 
 
 class ActionResult(BaseModel):
@@ -251,6 +296,17 @@ class ExploreConfig(BaseModel):
     experience_deprecated_threshold: float = 0.3
     min_interactive_threshold: int = 5
     deep_scan_max_elements: int = 150
+    vision_enabled: bool = False
+    vision_mode: str = "auto"
+    vision_quality_threshold: float = 0.45
+    vision_min_confidence: float = 0.65
+    vision_max_elements: int = 20
+    vision_max_calls_per_page: int = 2
+    vision_max_calls_per_task: int = 5
+    vision_timeout_ms: int = 30000
+    vision_max_screenshot_bytes: int = 4_000_000
+    vision_strong_canvas_ratio: float = 0.50
+    vision_sensitive_action_policy: str = "block"
     interactive_roles: list[str] = Field(
         default_factory=lambda: [
             "button",

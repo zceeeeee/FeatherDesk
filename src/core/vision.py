@@ -21,6 +21,7 @@ class ElementInfo:
     height: int = 0
     suggested_selector: str = ""
     confidence: float = 0.0
+    role: str = ""
 
 
 @dataclass
@@ -45,15 +46,23 @@ class VisionModule:
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         self._provider = provider or self._detect_provider()
         self._api_key = api_key or self._get_api_key()
         self._base_url = base_url or self._get_base_url()
         self._model = model or self._get_model()
+        self._timeout = timeout or float(os.getenv("VISION_TIMEOUT", "60"))
 
     def analyze_page(self, question: str | None = None) -> PageAnalysis:
         page = get_browser_manager().get_page()
         screenshot_bytes = page.screenshot()
+        return self.analyze_screenshot(screenshot_bytes, question=question)
+
+    def analyze_screenshot(
+        self, screenshot_bytes: bytes, question: str | None = None
+    ) -> PageAnalysis:
+        """Analyze caller-owned screenshot bytes without recapturing the page."""
         b64_image = base64.b64encode(screenshot_bytes).decode("utf-8")
         prompt = self._build_prompt(question)
         raw_response = self._call_llm(prompt, b64_image)
@@ -143,6 +152,7 @@ class VisionModule:
       "width": 80,
       "height": 30,
       "suggested_selector": "#button-id",
+      "role": "button",
       "confidence": 0.9
     }
   ],
@@ -190,7 +200,7 @@ class VisionModule:
                     }
                 ],
             },
-            timeout=60.0,
+            timeout=self._timeout,
         )
         response.raise_for_status()
         return response.json()["content"][0]["text"]
@@ -222,7 +232,7 @@ class VisionModule:
                     }
                 ],
             },
-            timeout=60.0,
+            timeout=self._timeout,
         )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
@@ -238,20 +248,33 @@ class VisionModule:
 
             data = json.loads(raw_response[json_start:json_end])
             analysis.summary = data.get("summary", "")
-            analysis.suggested_actions = data.get("suggested_actions", [])
+            suggested = data.get("suggested_actions", [])
+            analysis.suggested_actions = (
+                [str(v) for v in suggested[:10]]
+                if isinstance(suggested, list)
+                else []
+            )
             for item in data.get("elements", []):
+                if not isinstance(item, dict):
+                    continue
+                x = int(item.get("x", 0))
+                y = int(item.get("y", 0))
+                width = max(0, int(item.get("width", 0)))
+                height = max(0, int(item.get("height", 0)))
+                confidence = min(1.0, max(0.0, float(item.get("confidence", 0.0))))
                 analysis.elements.append(
                     ElementInfo(
                         description=item.get("description", ""),
-                        x=item.get("x", 0),
-                        y=item.get("y", 0),
-                        width=item.get("width", 0),
-                        height=item.get("height", 0),
+                        x=x,
+                        y=y,
+                        width=width,
+                        height=height,
                         suggested_selector=item.get("suggested_selector", ""),
-                        confidence=item.get("confidence", 0.0),
+                        confidence=confidence,
+                        role=item.get("role", ""),
                     )
                 )
-        except (json.JSONDecodeError, TypeError, AttributeError):
+        except (json.JSONDecodeError, TypeError, AttributeError, ValueError):
             analysis.summary = raw_response
         return analysis
 
@@ -264,6 +287,7 @@ def get_vision_module(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    timeout: float | None = None,
 ) -> VisionModule:
     """Return the process-wide VisionModule instance."""
     global _instance
@@ -273,6 +297,7 @@ def get_vision_module(
             api_key=api_key,
             base_url=base_url,
             model=model,
+            timeout=timeout,
         )
     return _instance
 

@@ -27,6 +27,7 @@ from src.core.explore.models import (
     SnapshotMode,
 )
 from src.core.explore.snapshot import SnapshotGenerator
+from src.core.explore.vision_router import VisionBudgetExceeded, VisionRouter
 from src.core.intent_parser import LLMIntentParser
 from src.core.llm_utils import chat_json_with_retry
 from src.logging import get_logger
@@ -99,6 +100,10 @@ class ExploreAgent:
         self._deep_scan_just_ran: bool = False  # 上一步是否刚执行过 deep_scan
         self._last_goto_url: str | None = None  # 上一次 goto 的目标 URL
         self._blocker_threshold: int = 3  # 连续失败 N 次触发 blocker
+        client = getattr(self._llm_parser, "_client", None)
+        self._vision_router = VisionRouter(self._config, client)
+        self._navigation_epoch = 0
+        self._last_snapshot_url: str | None = None
 
     def _get_browser_manager(self):
         return self._browser_manager_getter()
@@ -116,6 +121,32 @@ class ExploreAgent:
             experience_confidence_threshold=float(cfg.get("EXPERIENCE_CONFIDENCE_THRESHOLD", 0.8)),
             min_interactive_threshold=int(cfg.get("EXPLORE_MIN_INTERACTIVE_THRESHOLD", 5)),
             deep_scan_max_elements=int(cfg.get("EXPLORE_DEEP_SCAN_MAX_ELEMENTS", 150)),
+            vision_enabled=str(cfg.get("EXPLORE_VISION_ENABLED", "false")).lower()
+            in {"1", "true", "yes", "on"},
+            vision_mode=str(cfg.get("EXPLORE_VISION_MODE", "auto")),
+            vision_quality_threshold=float(
+                cfg.get("EXPLORE_VISION_QUALITY_THRESHOLD", 0.45)
+            ),
+            vision_min_confidence=float(
+                cfg.get("EXPLORE_VISION_MIN_CONFIDENCE", 0.65)
+            ),
+            vision_max_elements=int(cfg.get("EXPLORE_VISION_MAX_ELEMENTS", 20)),
+            vision_max_calls_per_page=int(
+                cfg.get("EXPLORE_VISION_MAX_CALLS_PER_PAGE", 2)
+            ),
+            vision_max_calls_per_task=int(
+                cfg.get("EXPLORE_VISION_MAX_CALLS_PER_TASK", 5)
+            ),
+            vision_timeout_ms=int(cfg.get("EXPLORE_VISION_TIMEOUT_MS", 30000)),
+            vision_max_screenshot_bytes=int(
+                cfg.get("EXPLORE_VISION_MAX_SCREENSHOT_BYTES", 4_000_000)
+            ),
+            vision_strong_canvas_ratio=float(
+                cfg.get("EXPLORE_VISION_STRONG_CANVAS_RATIO", 0.50)
+            ),
+            vision_sensitive_action_policy=str(
+                cfg.get("EXPLORE_VISION_SENSITIVE_ACTION_POLICY", "block")
+            ),
         )
 
     @property
@@ -127,6 +158,8 @@ class ExploreAgent:
         self._config = value
         self._snapshot_gen = SnapshotGenerator(value)
         self._executor = None
+        client = getattr(self._llm_parser, "_client", None)
+        self._vision_router = VisionRouter(value, client)
 
     @property
     def experience_manager(self) -> ExploreExperienceManager:
@@ -162,6 +195,9 @@ class ExploreAgent:
 
     def update_llm_parser(self, parser: LLMIntentParser | None) -> None:
         self._llm_parser = parser
+        self._vision_router = VisionRouter(
+            self._config, getattr(parser, "_client", None)
+        )
 
     def reset_task_state(self) -> None:
         self._last_snapshot = None
@@ -178,6 +214,9 @@ class ExploreAgent:
         self._consecutive_empty_snapshots = 0
         self._deep_scan_just_ran = False
         self._last_goto_url = None
+        self._navigation_epoch = 0
+        self._last_snapshot_url = None
+        self._vision_router.reset_task()
 
     # ── 失败记忆与循环检测 ──────────────────────────────────────
 
@@ -369,6 +408,12 @@ class ExploreAgent:
     def snapshot(self, step: Any) -> None:
         page = self._get_browser_manager().get_page()
         snapshot = self._snapshot_generator().snapshot(page, mode=SnapshotMode.COMPACT)
+        if self._last_snapshot_url is not None and snapshot.url != self._last_snapshot_url:
+            self._navigation_epoch += 1
+        self._last_snapshot_url = snapshot.url
+        if self._config.vision_enabled:
+            snapshot.surface_stats = self._vision_router.inspect_surface(page)
+            snapshot.aria_quality = self._vision_router.aria_quality(snapshot)
         # 如果上一步刚执行过 deep_scan，标记本次快照为已深度扫描
         if self._deep_scan_just_ran:
             snapshot.deep_scanned = True
@@ -404,11 +449,44 @@ class ExploreAgent:
             return None
 
         snapshot = self._last_snapshot
+        if self._config.vision_enabled and not snapshot.vision_enhanced:
+            strong_surface = (
+                self._vision_router.available
+                and self._vision_router.should_skip_deep_scan(snapshot)
+            )
+            poor_aria = (
+                snapshot.aria_quality < self._config.vision_quality_threshold
+            )
+            if poor_aria and not snapshot.deep_scanned and not strong_surface:
+                self._last_snapshot = None
+                return ActionBatch(
+                    actions=[
+                        Action(
+                            action=ActionType.REQUEST_DEEP_SCAN,
+                            snapshot_v=snapshot.version,
+                            intent="ARIA quality is insufficient; run deep scan before vision",
+                        )
+                    ]
+                )
+            if poor_aria and self._vision_router.should_enhance(snapshot):
+                try:
+                    page = self._get_browser_manager().get_page()
+                    snapshot = self._vision_router.enhance(
+                        page, snapshot, task, self._navigation_epoch
+                    )
+                    self._current_snapshot = snapshot
+                    self.ensure_executor().update_snapshot(snapshot)
+                except VisionBudgetExceeded as exc:
+                    logger.warning("Explore vision budget exhausted: %s", exc)
+                except Exception as exc:
+                    logger.warning("Explore vision enhancement failed: %s", exc)
         schema = {
             "type": "object",
             "properties": {
                 "task_complete": {"type": "boolean"},
                 "completion_summary": {"type": ["string", "null"]},
+                "need_vision": {"type": "boolean"},
+                "vision_reason": {"type": ["string", "null"]},
                 "actions": {
                     "type": "array",
                     "items": {
@@ -436,6 +514,7 @@ class ExploreAgent:
                                     "evaluate",
                                     "pause_for_input",
                                     "click_at",
+                                    "hover_at",
                                     "type",
                                     "dialog",
                                     "request_deep_scan",
@@ -484,6 +563,7 @@ class ExploreAgent:
             "4. keyboard 的 value 是按键名（Enter, Escape, Tab, Control+a 等）。\n"
             "5. drag 的 ref 是源元素，value 是目标元素的 ref。\n"
             "6. click_at 需要 x, y 视口坐标（用于 canvas 等无 ref 元素）。\n"
+            "6a. 视觉目标使用 v 开头的 ref。只允许 click 或 hover；不要对视觉目标执行 fill、上传或其他敏感动作。\n"
             "7. 会导致页面跳转的最后一步请加 condition=load 或 networkidle。\n"
             "8. 每个使用 ref 的动作都填写 snapshot_v 为当前快照版本。\n"
             "9. 不要编造快照里不存在的 ref。\n"
@@ -511,6 +591,8 @@ class ExploreAgent:
             "22. 如果页面显示登录表单、验证码、人机验证等需要人工介入的内容，"
             "且从操作历史中可以看到已经尝试过类似操作但失败了，"
             "必须使用 pause_for_input 暂停并告知用户，不要重复尝试。\n"
+            "23. 如果 ARIA 和视觉目标都不足以可靠规划，返回 need_vision=true 并说明 vision_reason，"
+            "不要猜测坐标。\n"
         )
 
         # ── 注入操作历史 ──
@@ -581,6 +663,47 @@ class ExploreAgent:
         except Exception as exc:
             logger.warning("Explore planner failed: %s", exc)
             return None
+
+        if batch.need_vision and not snapshot.vision_enhanced:
+            strong_surface = (
+                self._vision_router.available
+                and self._vision_router.should_skip_deep_scan(snapshot)
+            )
+            if not snapshot.deep_scanned and not strong_surface:
+                self._last_snapshot = None
+                return ActionBatch(
+                    actions=[
+                        Action(
+                            action=ActionType.REQUEST_DEEP_SCAN,
+                            snapshot_v=snapshot.version,
+                            intent=batch.vision_reason or "Planner requested vision",
+                        )
+                    ]
+                )
+            if self._vision_router.available:
+                try:
+                    page = self._get_browser_manager().get_page()
+                    snapshot = self._vision_router.enhance(
+                        page, snapshot, task, self._navigation_epoch
+                    )
+                    self._current_snapshot = snapshot
+                    self.ensure_executor().update_snapshot(snapshot)
+                    self._last_snapshot = snapshot
+                    return self.plan_actions(task)
+                except Exception as exc:
+                    logger.warning("Explore requested vision failed: %s", exc)
+            batch = ActionBatch(
+                actions=[
+                    Action(
+                        action=ActionType.PAUSE_FOR_INPUT,
+                        value=(
+                            "当前页面缺少可靠的语义信息，视觉识别也不可用。"
+                            "请手动完成当前步骤后继续。"
+                        ),
+                        intent=batch.vision_reason,
+                    )
+                ]
+            )
 
         for action in batch.actions:
             if action.ref and not action.snapshot_v:

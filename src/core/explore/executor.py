@@ -121,6 +121,7 @@ class ExploreExecutor:
             self._needs_snapshot = False
             self._deep_scan_requested = False
             batch = self._coerce_batch(batch)
+            batch = self._normalize_visual_actions(batch)
             self._validate_batch(batch)
             self._validate_version(batch.actions)
             self._validate_refs(batch.actions)
@@ -221,6 +222,10 @@ class ExploreExecutor:
                 action.x is None or action.y is None
             ):
                 raise ExploreError("click_at 操作缺少 x/y 坐标", ErrorCode.INVALID_FORMAT)
+            if action.action == ActionType.HOVER_AT and (
+                action.x is None or action.y is None
+            ):
+                raise ExploreError("hover_at 操作缺少 x/y 坐标", ErrorCode.INVALID_FORMAT)
             if action.action == ActionType.DIALOG and not action.dialog_action:
                 raise ExploreError("dialog 操作缺少 dialog_action (accept/dismiss)", ErrorCode.INVALID_FORMAT)
 
@@ -364,6 +369,8 @@ class ExploreExecutor:
                 )
             elif action.action == ActionType.CLICK_AT:
                 self._click_at(action.x or 0, action.y or 0)
+            elif action.action == ActionType.HOVER_AT:
+                self._hover_at(action.x or 0, action.y or 0)
             elif action.action == ActionType.TYPE:
                 self._type(action.ref or "", action.value or "", action.delay)
             elif action.action == ActionType.DIALOG:
@@ -532,6 +539,128 @@ class ExploreExecutor:
 
     def _click_at(self, x: int, y: int) -> None:
         self._page.mouse.click(x, y)
+
+    def _hover_at(self, x: int, y: int) -> None:
+        self._page.mouse.move(x, y)
+
+    def _normalize_visual_actions(self, batch: ActionBatch) -> ActionBatch:
+        """Convert visual refs to guarded viewport coordinate actions."""
+        visual_actions = [
+            action
+            for action in batch.actions
+            if isinstance(action.ref, str) and action.ref.startswith("v")
+        ]
+        if not visual_actions:
+            return batch
+        if not self._current_snapshot or not self._current_snapshot.screenshot_meta:
+            raise ExploreError(
+                "视觉动作缺少截图元数据", ErrorCode.INVALID_FORMAT
+            )
+
+        self._validate_visual_page_state()
+        target_map = {
+            target.ref: target for target in self._current_snapshot.visual_targets
+        }
+        min_confidence = float(
+            getattr(self._config, "vision_min_confidence", 0.65)
+        )
+        normalized: list[Action] = []
+        for action in batch.actions:
+            if not (isinstance(action.ref, str) and action.ref.startswith("v")):
+                normalized.append(action)
+                continue
+            target = target_map.get(action.ref)
+            if target is None:
+                raise RefExpiredError(action.ref, self._current_snapshot.version)
+            if target.confidence < min_confidence:
+                raise ElementNotInteractableError(
+                    action.ref, "视觉目标置信度低于安全阈值"
+                )
+            if (
+                str(getattr(self._config, "vision_sensitive_action_policy", "block"))
+                == "block"
+                and self._is_sensitive_visual_target(target.description)
+            ):
+                raise ElementNotInteractableError(
+                    action.ref, "敏感操作不能仅依据视觉坐标自动执行"
+                )
+            if action.action not in {ActionType.CLICK, ActionType.HOVER}:
+                raise ExploreError(
+                    f"视觉目标不允许执行敏感操作 {action.action}",
+                    ErrorCode.INVALID_FORMAT,
+                    action.ref,
+                )
+            meta = self._current_snapshot.screenshot_meta
+            x = round((target.x + target.width / 2) * meta.viewport_width)
+            y = round((target.y + target.height / 2) * meta.viewport_height)
+            replacement = action.model_copy(
+                update={
+                    "action": (
+                        ActionType.CLICK_AT
+                        if action.action == ActionType.CLICK
+                        else ActionType.HOVER_AT
+                    ),
+                    "ref": None,
+                    "x": x,
+                    "y": y,
+                }
+            )
+            normalized.append(replacement)
+        return batch.model_copy(update={"actions": normalized})
+
+    @staticmethod
+    def _is_sensitive_visual_target(description: str) -> bool:
+        text = description.casefold()
+        sensitive_terms = (
+            "支付",
+            "付款",
+            "购买",
+            "下单",
+            "转账",
+            "删除",
+            "发布",
+            "发送",
+            "确认订单",
+            "授权",
+            "pay",
+            "purchase",
+            "buy now",
+            "transfer",
+            "delete",
+            "publish",
+            "send",
+            "confirm order",
+            "authorize",
+        )
+        return any(term in text for term in sensitive_terms)
+
+    def _validate_visual_page_state(self) -> None:
+        """Reject coordinates captured before navigation, resize or scroll."""
+        if not self._current_snapshot or not self._current_snapshot.screenshot_meta:
+            return
+        meta = self._current_snapshot.screenshot_meta
+        current_url = str(getattr(self._page, "url", ""))
+        if current_url and current_url != meta.url:
+            raise SnapshotStaleError(meta.url, current_url)
+        try:
+            state = self._page.evaluate(
+                "() => ({width: window.innerWidth, height: window.innerHeight, "
+                "scrollX: window.scrollX || 0, scrollY: window.scrollY || 0})"
+            )
+        except Exception as exc:
+            raise SnapshotStaleError(meta.url, "page-state-unavailable") from exc
+        viewport_changed = (
+            int(state.get("width", 0)) != meta.viewport_width
+            or int(state.get("height", 0)) != meta.viewport_height
+        )
+        scroll_changed = (
+            abs(float(state.get("scrollX", 0)) - meta.scroll_x) > 2
+            or abs(float(state.get("scrollY", 0)) - meta.scroll_y) > 2
+        )
+        if viewport_changed or scroll_changed:
+            raise SnapshotStaleError(
+                self._current_snapshot.version, "viewport-or-scroll-changed"
+            )
 
     def _type(self, ref: str, value: str, delay: int | None = None) -> None:
         kwargs: dict[str, Any] = {}
