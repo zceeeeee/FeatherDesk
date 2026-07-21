@@ -76,9 +76,16 @@ class FakeDocument:
         self.saved: tuple[str, int | None] | None = None
         self.exported: tuple[str, int] | None = None
         self.closed = False
+        self.Saved = False
+        self.save_calls = 0
 
     def SaveAs2(self, path: str, FileFormat: int | None = None) -> None:  # noqa: N803
         self.saved = (path, FileFormat)
+        self.Saved = True
+
+    def Save(self) -> None:
+        self.save_calls += 1
+        self.Saved = True
 
     def ExportAsFixedFormat(self, path: str, fmt: int) -> None:
         self.exported = (path, fmt)
@@ -94,7 +101,6 @@ class FakeDocuments:
     def Add(self) -> FakeDocument:
         self.app.document = FakeDocument()
         return self.app.document
-
 
 class FakeApplication:
     def __init__(self) -> None:
@@ -422,6 +428,8 @@ def test_export_can_generate_word_only(tmp_path):
     assert result["pdf_path"] is None
     assert app.document is not None
     assert app.document.saved is not None
+    assert app.document.Saved is True
+    assert app.document.save_calls == 1
     assert app.document.exported is None
 
 
@@ -442,6 +450,8 @@ def test_export_can_generate_pdf_only(tmp_path):
     assert result["pdf_path"] is not None
     assert app.document is not None
     assert app.document.saved is None
+    assert app.document.Saved is True
+    assert app.document.save_calls == 0
     assert app.document.exported is not None
 
 
@@ -461,7 +471,29 @@ def test_export_defaults_to_word_and_pdf(tmp_path):
     assert result["pdf_path"] is not None
     assert app.document is not None
     assert app.document.saved is not None
+    assert app.document.Saved is True
+    assert app.document.save_calls == 1
     assert app.document.exported is not None
+
+
+def test_file_name_overrides_name_from_explicit_save_path(tmp_path):
+    app = FakeApplication()
+    old_path = tmp_path / "原来的名字.docx"
+
+    result = export_article_to_pdf(
+        title="文章标题",
+        body="正文",
+        docx_path=str(old_path),
+        file_name="修改后的名字",
+        output_format="both",
+        keep_open=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert Path(result["docx_path"]).name == "修改后的名字.docx"
+    assert Path(result["pdf_path"]).name == "修改后的名字.pdf"
+    assert Path(result["docx_path"]).parent == tmp_path.resolve()
+    assert Path(result["pdf_path"]).parent == tmp_path.resolve()
 
 
 def test_router_routes_wps_style_and_insert_image_request():
@@ -475,16 +507,105 @@ def test_router_routes_wps_style_and_insert_image_request():
     assert decision.skill.id == "domain/wps_writer_export"
     assert '"edewvr"' in decision.script
     assert '"wewret"' in decision.script
-    assert 'file_name="测试"' in decision.script
+    assert '__agentic_prepare_wps_file_name("测试", __param_title)' in decision.script
+    assert "file_name=__param_file_name" in decision.script
     assert '"D:/tmp/test.pdf"' in decision.script
     assert '"宋体"' in decision.script
     assert '"14"' in decision.script
     assert 'font_color="红色"' in decision.script
     assert 'italic="斜体"' in decision.script
-    assert (
-        'image_path="D:\\\\Users\\\\qq275\\\\Pictures\\\\Screenshots\\\\屏幕截图 2026-04-07 180134.png"'
-        in decision.script
+    assert "__agentic_prepare_wps_image" in decision.script
+    assert "D:\\\\Users\\\\qq275\\\\Pictures\\\\Screenshots" in decision.script
+    assert "image_path=__param_image_path" in decision.script
+
+
+def test_wps_image_prompt_keeps_missing_values_as_minus_one():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("WPS写文章，标题是测试，内容是正文")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert '__agentic_prepare_wps_image("-1", "-1")' in decision.script
+    assert "是否在 WPS 文档末尾插入图片" in decision.script
+    assert "[yes] [no]" in decision.script
+
+
+def test_wps_image_prompt_initializes_yes_and_image_path_from_task():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route(
+        r'WPS写文章，标题是测试，内容是正文，插入图片 "D:\Pictures\cover.png"'
     )
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    expected = '__agentic_prepare_wps_image("true", "D:\\\\Pictures\\\\cover.png")'
+    assert expected in decision.script
+    assert "image_path=__param_image_path" in decision.script
+
+
+def test_wps_image_prompt_initializes_no_without_a_path():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("WPS写文章，标题是测试，内容是正文，不要插入图片")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert '__agentic_prepare_wps_image("false", "-1")' in decision.script
+
+
+def test_wps_image_prompt_extracts_path_after_chinese_shi():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route(
+        'wps写文章 要插入图片 图片地址时'
+        '"C:\\Users\\hcy15\\Desktop\\7e68b7c7055d48965a12e5a64ae0bc3.jpg"'
+    )
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    expected_path = (
+        '"C:\\\\Users\\\\hcy15\\\\Desktop\\\\'
+        '7e68b7c7055d48965a12e5a64ae0bc3.jpg"'
+    )
+    assert expected_path in decision.script
+    image_prompt = decision.script.index("__param_image_path =")
+    save_prompt = decision.script.index("__param_output_dir, __param_docx_path")
+    assert image_prompt < save_prompt
+
+
+def test_wps_file_name_prompt_is_last_export_option_and_uses_title_default():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("WPS写文章，标题是季度总结，内容是本季度工作内容")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert "def __agentic_prepare_wps_file_name" in decision.script
+    assert "'default_value': default_name" in decision.script
+    assert "else '新建文档'" in decision.script
+    assert '__agentic_prepare_wps_file_name("-1", __param_title)' in decision.script
+    output_format = decision.script.index("__param_output_format =")
+    file_name = decision.script.index("__param_file_name =")
+    run_call = decision.script.index("\nrun(\n")
+    assert output_format < file_name < run_call
+
+
+def test_wps_ai_body_passes_user_requirements_without_forced_styles():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("WPS写文章，标题是测试，内容是只要文字，不要加粗和下划线")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert "用户原始要求" in decision.script
+    assert "不要擅自添加用户未要求的格式" in decision.script
+    assert "仅当用户原始要求明确提出对应格式时" in decision.script
+    assert '不同颜色使用 <span style="color:#RRGGBB">文字</span>' in decision.script
+    assert "用户未要求的格式不得添加" in decision.script
+    assert "关键观点可加粗" not in decision.script
+    assert "下划线使用 <u>文字</u>" not in decision.script
 
 
 def test_router_routes_markdown_file_to_wps_article():
@@ -495,4 +616,5 @@ def test_router_routes_markdown_file_to_wps_article():
     assert decision.skill is not None
     assert decision.skill.id == "domain/wps_writer_export"
     assert '"D:\\\\fagougou\\\\doc\\\\tmp.md"' in decision.script
-    assert 'file_name="fev"' in decision.script
+    assert '__agentic_prepare_wps_file_name("fev", __param_title)' in decision.script
+    assert "file_name=__param_file_name" in decision.script

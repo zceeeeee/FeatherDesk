@@ -405,6 +405,22 @@ class TestBrowserPrimitives:
         assert bm.cleaned is True
         assert bm._context.logged_in is False
 
+    def test_panel_prompt_does_not_require_a_browser_page(self):
+        browser_manager = MagicMock()
+        browser_manager.get_page.side_effect = RuntimeError("browser is not launched")
+        panel = MagicMock()
+        panel.prompt.return_value = "WPS参数"
+
+        with patch("src.panel.get_panel_manager", return_value=panel):
+            result = ScriptEngine(browser_manager).execute(
+                "print(panel_prompt('请输入 WPS 参数'))"
+            )
+
+        assert result.success is True
+        assert result.output.strip() == "WPS参数"
+        browser_manager.get_page.assert_not_called()
+        panel.prompt.assert_called_once_with(None, "请输入 WPS 参数")
+
     @pytest.mark.parametrize(
         ("save_answer", "expected_saved"),
         [("yes", ["example"]), ("no", [])],

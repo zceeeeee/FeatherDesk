@@ -191,7 +191,8 @@ skills:
       file_name:
         type: string
         required: false
-        description: "文档文件名，不含路径时用于生成 docx/pdf 文件名"
+        default: "新建文档"
+        description: "文档文件名，不含扩展名；执行时默认使用文章标题，标题为空时使用新建文档"
         extract_patterns:
           - '(?:文件名|文件名称|filename|file_name)\s*(?:是|为|:|：)?\s*["“]?([^"”，,。;；\n]+)'
       font_name:
@@ -250,12 +251,19 @@ skills:
         description: "是否使用斜体"
         extract_patterns:
           - '(斜体|italic)'
+      insert_image:
+        type: boolean
+        required: false
+        default: "-1"
+        description: "是否在文档末尾插入本地图片；无法从用户指令判断时为 -1，并在执行前询问"
+        extract_patterns:
+          - '(?:是否)?(?:插入|添加|加入|放入)(?:一张|本地)?图片\s*(?:是|为|:|：)?\s*(是|否|需要|不需要|true|false|yes|no)'
       image_path:
         type: image_path
         required: false
         description: "需要插入到文档末尾的本地图片路径"
         extract_patterns:
-          - '(?:插入图片|图片地址|图片路径|图片|image_path|image)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.(?:jpg|jpeg|png|webp|bmp|gif))'
+          - '(?:插入图片|图片地址|图片路径|图片|image_path|image)\s*(?:是|为|时|位于|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.(?:jpg|jpeg|png|webp|bmp|gif))'
 
   # ──────────────────────────────────────────────
   # 微信客户端

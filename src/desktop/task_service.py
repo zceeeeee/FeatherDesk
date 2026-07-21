@@ -43,6 +43,47 @@ def _is_wechat_desktop_task(content: str) -> bool:
     )
 
 
+def _is_wps_desktop_task(content: str) -> bool:
+    normalized = content.strip().lower()
+    if any(
+        term in normalized
+        for term in ("怎么", "如何", "为什么", "是什么", "能否", "支持什么", "有哪些")
+    ):
+        return False
+    products = (
+        "wps",
+        "word",
+        "金山文字",
+        "金山办公",
+        ".doc",
+        ".docx",
+        ".wps",
+    )
+    actions = (
+        "写文章",
+        "写文档",
+        "新建文档",
+        "创建文档",
+        "生成文档",
+        "导出",
+        "保存",
+        "润色",
+        "排版",
+        "修改格式",
+        "格式化",
+        "插入图片",
+        "转换",
+        "转成",
+    )
+    return any(term in normalized for term in products) and any(
+        term in normalized for term in actions
+    )
+
+
+def _is_desktop_only_task(content: str) -> bool:
+    return _is_wechat_desktop_task(content) or _is_wps_desktop_task(content)
+
+
 class DesktopTaskCancelled(RuntimeError):
     pass
 
@@ -274,7 +315,7 @@ class DesktopTaskService:
                 payload={"state": "running"},
             )
 
-            desktop_only = _is_wechat_desktop_task(content)
+            desktop_only = _is_desktop_only_task(content)
             browser = get_browser_manager()
             if desktop_only:
                 if browser.is_alive():

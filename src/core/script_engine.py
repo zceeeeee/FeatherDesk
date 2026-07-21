@@ -303,21 +303,14 @@ class ScriptEngine:
         # 注入面板交互函数
         from src.panel import get_panel_manager
         _pm = get_panel_manager()
-        _get_page = self._get_browser_manager
 
         def panel_log(message: str) -> None:
-            """向浏览器面板写入日志。"""
-            _pm.log(_get_page().get_page(), str(message))
+            """向桌面交互面板写入日志。"""
+            _pm.log(None, str(message))
 
         def panel_prompt(question: str) -> str:
             """向用户提问并等待回答。"""
-            try:
-                return _pm.prompt(_get_page().get_page(), str(question))
-            except Exception as exc:
-                if "Target page, context or browser has been closed" not in str(exc):
-                    raise
-                log("Panel prompt target was closed; reopening page and retrying")
-                return _pm.prompt(_get_page().get_page(), str(question))
+            return _pm.prompt(None, str(question))
 
         def panel_offer(
             question: str,
@@ -325,34 +318,34 @@ class ScriptEngine:
         ) -> str | None:
             """Show a desktop confirmation without pausing script execution."""
             return _pm.offer(
-                _get_page().get_page(),
+                None,
                 str(question),
                 on_resolve=on_resolve,
             )
 
         def panel_read() -> dict:
             """读取用户通过面板输入的最新数据。"""
-            return _pm.read_data(_get_page().get_page()) or {}
+            return _pm.read_data(None) or {}
 
         def panel_read_events() -> list:
             """读取并清空面板事件队列。"""
-            return _pm.read_events(_get_page().get_page())
+            return _pm.read_events(None)
 
         def panel_show() -> None:
             """显示面板。"""
-            _pm.toggle(_get_page().get_page(), True)
+            _pm.toggle(None, True)
 
         def panel_hide() -> None:
             """隐藏面板。"""
-            _pm.toggle(_get_page().get_page(), False)
+            _pm.toggle(None, False)
 
         def panel_set_title(text: str) -> None:
             """设置面板标题。"""
-            _pm.set_title(_get_page().get_page(), str(text))
+            _pm.set_title(None, str(text))
 
         def panel_set_fields(fields: list) -> None:
             """动态更新面板表单字段。"""
-            _pm.set_fields(_get_page().get_page(), fields)
+            _pm.set_fields(None, fields)
 
         def llm_generate_text(prompt: str) -> str:
             """Generate free-form text with the configured LLM."""
