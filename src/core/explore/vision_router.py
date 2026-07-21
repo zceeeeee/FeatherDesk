@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from src.logging import get_logger
+
 from .models import (
     ExploreConfig,
     ScreenshotMeta,
@@ -16,6 +18,8 @@ from .models import (
     SurfaceStats,
     VisualTarget,
 )
+
+logger = get_logger(__name__)
 
 
 class VisionBudgetExceeded(RuntimeError):
@@ -120,6 +124,11 @@ class VisionRouter:
         if len(screenshot) > self._config.vision_max_screenshot_bytes:
             raise RuntimeError("Explore screenshot exceeds configured byte limit")
 
+        logger.info(
+            "Explore Vision 增强: 截图大小=%d bytes, url=%s, epoch=%d",
+            len(screenshot), snapshot.url, navigation_epoch,
+        )
+
         stats = snapshot.surface_stats
         width = max(1, stats.viewport_width)
         height = max(1, stats.viewport_height)
@@ -174,6 +183,13 @@ class VisionRouter:
         snapshot.visual_summary = str(analysis.summary)[:1000]
         snapshot.visual_targets = targets
         snapshot.vision_enhanced = True
+
+        # 记录视觉增强结果
+        confidence_dist = [f"{t.confidence:.2f}" for t in targets]
+        logger.info(
+            "Explore Vision 增强完成: %d 个视觉目标, 置信度分布=[%s], summary=%s",
+            len(targets), ", ".join(confidence_dist), snapshot.visual_summary[:200],
+        )
         return snapshot
 
     def _make_vision_module(self, module_type):

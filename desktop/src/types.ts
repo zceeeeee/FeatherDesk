@@ -124,6 +124,8 @@ export interface DesktopSettings {
   browserHeadless: boolean;
   maxSteps: number;
   useCloakBrowser: boolean;
+  visionEnabled: boolean;
+  logLevel: "DEBUG" | "INFO" | "WARNING" | "ERROR";
 }
 
 export interface ApiConnectionTestResult {

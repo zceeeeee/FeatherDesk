@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
+
+from src.logging import get_logger
 
 from .models import AriaNode, FocusTarget, SnapshotMode, SnapshotResponse
 from .ref_generator import RefGenerator
+
+logger = get_logger(__name__)
 
 
 _ARIA_EXTRACTION_JS_FALLBACK = r"""
@@ -416,6 +421,7 @@ class SnapshotGenerator:
         mode: SnapshotMode = SnapshotMode.COMPACT,
         focus: FocusTarget | None = None,
     ) -> SnapshotResponse:
+        start = time.time()
         self._version_counter += 1
         version = f"snapshot_v{self._version_counter}"
 
@@ -431,10 +437,17 @@ class SnapshotGenerator:
         interactive_count = self._count_interactive(nodes)
         state = self._detect_page_state(page)
 
+        duration_ms = int((time.time() - start) * 1000)
+        url = str(getattr(page, "url", "") or "")
+        logger.debug(
+            "Explore 快照生成完成: version=%s url=%s interactive_count=%d mode=%s (耗时 %dms)",
+            version, url, interactive_count, mode.value, duration_ms,
+        )
+
         return SnapshotResponse(
             version=version,
             mode=mode,
-            url=str(getattr(page, "url", "") or ""),
+            url=url,
             title=self._page_title(page),
             nodes=nodes,
             interactive_count=interactive_count,
@@ -505,6 +518,7 @@ class SnapshotGenerator:
         focus: FocusTarget | None = None,
     ) -> SnapshotResponse:
         """强制执行深度扫描，忽略交互元素阈值。供 request_deep_scan 动作调用。"""
+        start = time.time()
         self._version_counter += 1
         version = f"snapshot_v{self._version_counter}"
 
@@ -519,10 +533,17 @@ class SnapshotGenerator:
         interactive_count = self._count_interactive(nodes)
         state = self._detect_page_state(page)
 
+        duration_ms = int((time.time() - start) * 1000)
+        url = str(getattr(page, "url", "") or "")
+        logger.info(
+            "Explore 深度扫描完成: version=%s url=%s interactive_count=%d (耗时 %dms)",
+            version, url, interactive_count, duration_ms,
+        )
+
         return SnapshotResponse(
             version=version,
             mode=mode,
-            url=str(getattr(page, "url", "") or ""),
+            url=url,
             title=self._page_title(page),
             nodes=nodes,
             interactive_count=interactive_count,

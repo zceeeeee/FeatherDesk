@@ -424,7 +424,9 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     LLM_MAX_TOKENS: stored.maxTokens || "4096",
     BROWSER_HEADLESS: stored.browserHeadless || "false",
     DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",
-    USE_CLOAKBROWSER: stored.useCloakBrowser || "true"
+    USE_CLOAKBROWSER: stored.useCloakBrowser || "true",
+    EXPLORE_VISION_ENABLED: stored.visionEnabled || "false",
+    LOG_LEVEL: stored.logLevel || "INFO"
   });
   if (provider === "anthropic") {
     env.ANTHROPIC_API_KEY = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -601,6 +603,8 @@ function registerIpc(): void {
   ipcMain.handle("settings:get", () => {
     const settings = readJson<Record<string, string>>(userFile("settings.json"), {});
     const maxSteps = Math.min(100, Math.max(5, Math.round(Number(settings.maxSteps || "20")) || 20));
+    const validLogLevels = ["DEBUG", "INFO", "WARNING", "ERROR"];
+    const logLevel = validLogLevels.includes(settings.logLevel) ? settings.logLevel : "INFO";
     return {
       provider: settings.provider || "openai",
       baseUrl: settings.baseUrl || "https://api.openai.com/v1",
@@ -610,6 +614,8 @@ function registerIpc(): void {
       browserHeadless: settings.browserHeadless === "true",
       maxSteps,
       useCloakBrowser: settings.useCloakBrowser !== "false",
+      visionEnabled: settings.visionEnabled === "true",
+      logLevel,
       apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : ""
     };
   });
@@ -640,6 +646,10 @@ function registerIpc(): void {
       Math.min(100, Math.max(5, Math.round(Number(incoming.maxSteps ?? 20)) || 20))
     );
     existing.useCloakBrowser = String(incoming.useCloakBrowser !== false);
+    existing.visionEnabled = String(Boolean(incoming.visionEnabled));
+    const validLogLevels = ["DEBUG", "INFO", "WARNING", "ERROR"];
+    const incomingLogLevel = String(incoming.logLevel || "INFO").toUpperCase();
+    existing.logLevel = validLogLevels.includes(incomingLogLevel) ? incomingLogLevel : "INFO";
     writeJson(userFile("settings.json"), existing);
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };

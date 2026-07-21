@@ -8,7 +8,11 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from src.logging import get_logger
+
 from .models import ActionType, ExploreExperience, Skill
+
+logger = get_logger(__name__)
 
 
 class ExperienceManager:
@@ -29,12 +33,21 @@ class ExperienceManager:
         if existing:
             # 使用 update_confidence 统一更新，确保成功/失败都能正确处理
             self.update_confidence(existing.id, success=True)
+            logger.info(
+                "Explore 经验更新: id=%s task=%s site=%s confidence=%.2f",
+                existing.id, experience.task, experience.site,
+                self._experiences[existing.id].confidence,
+            )
             return self._experiences[existing.id]
 
         if not experience.action_count:
             experience.action_count = len(experience.actions)
         self._experiences[experience.id] = experience
         self._save_to_disk(experience)
+        logger.info(
+            "Explore 经验保存: id=%s task=%s site=%s actions=%d",
+            experience.id, experience.task, experience.site, experience.action_count,
+        )
         return experience
 
     def find_similar(self, task: str, site: str) -> ExploreExperience | None:
@@ -45,7 +58,12 @@ class ExperienceManager:
         ]
         for existing in candidates:
             if self._calculate_similarity(task, site, existing) > 0.8:
+                logger.debug(
+                    "Explore 经验匹配: task=%s site=%s -> id=%s confidence=%.2f",
+                    task, site, existing.id, existing.confidence,
+                )
                 return existing
+        logger.debug("Explore 经验未匹配: task=%s site=%s (候选 %d 个)", task, site, len(candidates))
         return None
 
     def find_by_url(self, url: str) -> list[ExploreExperience]:
@@ -63,6 +81,7 @@ class ExperienceManager:
         exp = self._experiences.get(experience_id)
         if not exp:
             return
+        old_confidence = exp.confidence
         if success:
             exp.success_count += 1
             exp.confidence = min(0.95, exp.confidence + 0.05)
@@ -72,8 +91,15 @@ class ExperienceManager:
         exp.last_used = datetime.now()
         if exp.confidence < 0.3:
             exp.status = "deprecated"
+            logger.info(
+                "Explore 经验已废弃: id=%s confidence=%.2f < 0.3", experience_id, exp.confidence,
+            )
         self._experiences[experience_id] = exp
         self._save_to_disk(exp)
+        logger.debug(
+            "Explore 经验置信度更新: id=%s success=%s %.2f -> %.2f",
+            experience_id, success, old_confidence, exp.confidence,
+        )
 
     def try_upgrade_to_skill(self, experience_id: str) -> Skill | None:
         exp = self._experiences.get(experience_id)
