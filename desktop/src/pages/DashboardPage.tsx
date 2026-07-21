@@ -141,7 +141,9 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
     requestTimeout: 60,
     browserHeadless: false,
     maxSteps: 20,
-    useCloakBrowser: true
+    useCloakBrowser: true,
+    visionEnabled: false,
+    logLevel: "INFO"
   });
   const [saved, setSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -225,6 +227,7 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
             <label>Model<input disabled={testingConnection} value={settings.model} onChange={(event) => updateTestedSetting({ model: event.target.value })} /></label>
             <label>Temperature<div className="range-row"><input type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} /><output>{settings.temperature.toFixed(1)}</output></div></label>
             <label>Request Timeout（秒）<input disabled={testingConnection} type="number" min="5" max="600" value={settings.requestTimeout} onChange={(event) => updateTestedSetting({ requestTimeout: Number(event.target.value) })} /></label>
+            <label className="toggle-row"><span><strong>启用视觉模型</strong><small>Explore 模式下用视觉模型辅助识别复杂页面（Canvas/WebGL 等）。</small></span><input type="checkbox" checked={settings.visionEnabled} onChange={(event) => setSettings({ ...settings, visionEnabled: event.target.checked })} /></label>
           </section>
         </div>
       ) : null}
@@ -233,6 +236,7 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
           <label className="toggle-row"><span><strong>无头模式</strong><small>后台运行浏览器，不显示窗口</small></span><input type="checkbox" checked={settings.browserHeadless} onChange={(event) => setSettings({ ...settings, browserHeadless: event.target.checked })} /></label>
           <label className="toggle-row"><span><strong>启用 CloakBrowser</strong><small>使用带反检测能力的浏览器引擎；关闭后使用 Chromium。</small></span><input type="checkbox" checked={settings.useCloakBrowser} onChange={(event) => setSettings({ ...settings, useCloakBrowser: event.target.checked })} /></label>
           <label>最大循环步数<input type="number" min="5" max="100" step="1" value={settings.maxSteps} onChange={(event) => setSettings({ ...settings, maxSteps: Number(event.target.value) })} /><small className="field-help">单个任务最多执行 5–100 步，默认 20 步。</small></label>
+          <label>日志级别<select value={settings.logLevel} onChange={(event) => setSettings({ ...settings, logLevel: event.target.value as DesktopSettings["logLevel"] })}><option value="DEBUG">DEBUG（详细调试）</option><option value="INFO">INFO（常规信息）</option><option value="WARNING">WARNING（仅警告）</option><option value="ERROR">ERROR（仅错误）</option></select><small className="field-help">DEBUG 可查看 LLM 请求/响应等详细信息，保存后需重启生效。</small></label>
           <button className="button-secondary" onClick={() => void apiRequest("/api/browser/close", { method: "POST" })}>关闭当前浏览器</button>
         </div>
       ) : null}

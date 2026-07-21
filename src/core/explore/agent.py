@@ -274,7 +274,7 @@ class ExploreAgent:
         return None
 
     def should_skip_generated_script(self, task: str, script: str) -> bool:
-        if not self.should_resolve_entry_with_llm(task):
+        if not self.extract_web_target_phrase(task):
             return False
         try:
             page_url = self._get_browser_manager().get_page().url
@@ -304,11 +304,8 @@ class ExploreAgent:
         if target_url:
             return self._goto_initial_entry_url(target_url)
 
-        if self.should_resolve_entry_with_llm(task):
+        if self.extract_web_target_phrase(task):
             self._entry_bootstrap_attempted.add(task)
-            target_url = self._resolve_initial_entry_url_via_llm(task)
-            if target_url:
-                return self._goto_initial_entry_url(target_url)
             target_url = self._resolve_entry_url_via_search(task)
             if target_url:
                 return self._goto_initial_entry_url(target_url)
@@ -346,12 +343,8 @@ class ExploreAgent:
 
         self._entry_bootstrap_attempted.add(task)
         target_url = self.resolve_initial_entry_url(task)
-        if not target_url:
-            should_resolve = self.should_resolve_entry_with_llm(task)
-            if should_resolve:
-                target_url = self._resolve_initial_entry_url_via_llm(task)
-            if should_resolve and not target_url:
-                target_url = self._resolve_entry_url_via_search(task)
+        if not target_url and self.extract_web_target_phrase(task):
+            target_url = self._resolve_entry_url_via_search(task)
         if not target_url:
             return None
         return self._goto_initial_entry_url(target_url)
@@ -428,6 +421,15 @@ class ExploreAgent:
             f"Explore 快照: {snapshot.version} "
             f"(可交互元素 {snapshot.interactive_count} 个)"
         )
+
+        # ── 快照元数据日志 ──
+        logger.info(
+            "Explore 快照生成: version=%s url=%s interactive_count=%d "
+            "deep_scanned=%s aria_quality=%.2f vision_enhanced=%s",
+            snapshot.version, snapshot.url, snapshot.interactive_count,
+            snapshot.deep_scanned, snapshot.aria_quality, snapshot.vision_enhanced,
+        )
+
         # 输出快照中的交互元素列表，方便调试
         interactive = [
             f"  [{n.ref}] {n.role} \"{n.name}\""
@@ -651,6 +653,13 @@ class ExploreAgent:
         )
         if self._last_panel_answer:
             prompt += f"\n\n上一次用户回答: {self._last_panel_answer}"
+
+        # ── 记录 LLM 规划请求 ──
+        logger.debug(
+            "Explore 规划器 LLM 请求:\n  task=%s\n  snapshot_url=%s\n  snapshot_version=%s\n  prompt_len=%d\n  prompt_preview=%s",
+            task, snapshot.url, snapshot.version, len(prompt), prompt[:2000],
+        )
+
         try:
             data = chat_json_with_retry(
                 self._llm_parser._client,
@@ -660,8 +669,28 @@ class ExploreAgent:
                 temperature=0,
                 max_tokens=2048,
             )
+
+            # ── 记录 LLM 原始响应 ──
+            logger.debug("Explore 规划器 LLM 响应: %s", json.dumps(data, ensure_ascii=False)[:3000])
+
             data = self.normalize_action_batch_data(data)
             batch = ActionBatch.model_validate(data)
+
+            # ── 记录解析后的 ActionBatch ──
+            action_summaries = []
+            for a in batch.actions:
+                desc = f"{a.action}"
+                if a.ref:
+                    desc += f"(ref={a.ref})"
+                if a.value:
+                    desc += f"=\"{str(a.value)[:30]}\""
+                if a.url:
+                    desc += f" url={a.url}"
+                action_summaries.append(desc)
+            logger.info(
+                "Explore 规划结果: task_complete=%s, %d 个操作 [%s]",
+                batch.task_complete, len(batch.actions), ", ".join(action_summaries),
+            )
         except Exception as exc:
             logger.warning("Explore planner failed: %s", exc)
             return None
@@ -812,6 +841,17 @@ class ExploreAgent:
 
         active_executor = executor or self.ensure_executor()
         result = active_executor.execute(ActionBatch(actions=step.actions))
+
+        # ── 记录执行结果汇总 ──
+        action_results_summary = [
+            f"{r.action}(ref={r.ref}, success={r.success}, {r.duration_ms}ms)"
+            for r in result.results
+        ]
+        logger.info(
+            "Explore 执行汇总: status=%s success=%s 操作数=%d [%s]",
+            result.status, result.success, len(result.results),
+            ", ".join(action_results_summary),
+        )
 
         # ── 记录操作历史 ──
         step_num = getattr(step, "step_number", 0)
@@ -1036,62 +1076,12 @@ class ExploreAgent:
         self.explore_mode_active = True  # 标记整个任务进入 Explore 模式
         return target_url
 
-    def _resolve_initial_entry_url_via_llm(self, task: str) -> str | None:
-        if not self._llm_parser or not self._llm_parser.available:
-            return None
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "should_open": {"type": "boolean"},
-                "url": {"type": ["string", "null"]},
-                "confidence": {"type": "number"},
-                "reason": {"type": "string"},
-            },
-            "required": ["should_open", "url", "confidence", "reason"],
-        }
-        prompt = (
-            "你是浏览器 Explore 模式的起始网页解析器。当前页面是 about:blank，"
-            "技能库和固定规则没有命中。请判断执行用户任务前是否需要先打开某个网页。\n\n"
-            f"用户任务: {task}\n\n"
-            "要求:\n"
-            "1. 如果任务明确提到某个网站、平台、购物网站、AI 对话网站或 Web 服务，返回它的官方入口 URL。\n"
-            "2. 购物网站搜索商品时，返回该购物网站主页，不要返回搜索引擎。\n"
-            "3. AI 网站询问问题时，优先返回该网站的对话/聊天入口；不知道具体对话入口时返回主页。\n"
-            "4. 如果任务是本地软件、微信/WPS/桌面客户端操作，或无法可靠判断网站，should_open=false。\n"
-            "5. 不要把未知站点任务转成百度/Google/Bing 搜索；目标是打开相关网站本身。\n"
-            "6. 如果只确定域名，也可以返回裸域名，系统会自动补 https://。\n"
-            "7. 不要编造不存在的网站；url 必须是相关网站的域名或完整 http/https 地址。\n"
-        )
-        try:
-            data = chat_json_with_retry(
-                self._llm_parser._client,
-                prompt,
-                system_prompt="只返回起始网页判断 JSON，不要输出解释。",
-                schema=schema,
-                temperature=0,
-                max_tokens=1024,
-            )
-        except Exception as exc:
-            logger.warning("Explore entry URL LLM resolution failed: %s", exc)
-            return None
-
-        if not data.get("should_open"):
-            return None
-        try:
-            confidence = float(data.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0
-        if confidence < 0.55:
-            return None
-        return self.normalize_entry_url(data.get("url"))
-
     def _resolve_entry_url_via_search(self, task: str) -> str | None:
         if not self._llm_parser or not self._llm_parser.available:
             return None
 
         site_phrase = self.extract_web_target_phrase(task) or task.strip()[:40]
-        search_query = f"{site_phrase} 官网"
+        search_query = site_phrase
         bing_url = f"https://www.bing.com/search?q={search_query}"
 
         page = self._get_browser_manager().get_page()
@@ -1313,12 +1303,6 @@ class ExploreAgent:
                     continue
                 return platform
         return None
-
-    @classmethod
-    def should_resolve_entry_with_llm(cls, task: str) -> bool:
-        if cls.extract_first_url(task) or cls.infer_target_platform(task):
-            return False
-        return cls.extract_web_target_phrase(task) is not None
 
     @staticmethod
     def extract_web_target_phrase(task: str) -> str | None:

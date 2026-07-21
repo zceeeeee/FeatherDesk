@@ -649,10 +649,6 @@ class AgentLoop:
     def _infer_target_platform(cls, task: str) -> str | None:
         return ExploreAgent.infer_target_platform(task)
 
-    @classmethod
-    def _should_resolve_entry_with_llm(cls, task: str) -> bool:
-        return ExploreAgent.should_resolve_entry_with_llm(task)
-
     @staticmethod
     def _extract_web_target_phrase(task: str) -> str | None:
         return ExploreAgent.extract_web_target_phrase(task)
@@ -666,20 +662,39 @@ class AgentLoop:
 
     def _emit_step_event(self, step: AgentStep, task: str, task_id: str) -> None:
         """发射单步事件（EVENT_AGENT_STEP after + 阶段事件）。"""
+        data = {
+            "task": task,
+            "task_id": task_id,
+            "step_number": step.step_number,
+            "state": step.state.value,
+            "action": step.action,
+            "result": step.result,
+            "success": step.success,
+            "error": step.error,
+        }
+        # ── Explore 模式附加数据 ──
+        if step.mode:
+            data["mode"] = step.mode
+        if step.actions:
+            action_summaries = []
+            for a in step.actions:
+                desc = f"{a.action}"
+                if a.ref:
+                    desc += f"(ref={a.ref})"
+                if a.value:
+                    desc += f"=\"{str(a.value)[:30]}\""
+                action_summaries.append(desc)
+            data["explore_actions"] = action_summaries
+            data["explore_action_count"] = len(step.actions)
+        if step.snapshot:
+            data["snapshot_version"] = step.snapshot.version
+            data["snapshot_url"] = step.snapshot.url
+            data["snapshot_interactive_count"] = step.snapshot.interactive_count
         self._bus.emit(
             Event(
                 name=EVENT_AGENT_STEP,
                 phase=Phase.AFTER,
-                data={
-                    "task": task,
-                    "task_id": task_id,
-                    "step_number": step.step_number,
-                    "state": step.state.value,
-                    "action": step.action,
-                    "result": step.result,
-                    "success": step.success,
-                    "error": step.error,
-                },
+                data=data,
             )
         )
 
@@ -928,6 +943,16 @@ class AgentLoop:
 
         # LLM 判定需要 explore
         if decision.source == "llm_explore":
+            # 如果页面是空白，先尝试导航到目标站点
+            if not self._desktop_only:
+                bm = get_browser_manager()
+                page = bm.get_page()
+                if explore_agent.is_blank_page(getattr(page, "url", "")):
+                    entry_url = explore_agent.resolve_initial_entry_url(task)
+                    if entry_url:
+                        logger.info("PLAN: llm_explore navigating blank page to %s", entry_url)
+                        explore_agent._goto_initial_entry_url(entry_url)
+
             step.action = "LLM 判定进入 Explore 模式"
             step.mode = "explore"
             step.result = f"LLM 路由判定: {decision.reason}"

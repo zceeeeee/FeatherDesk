@@ -8,6 +8,9 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from src.core.login_guard import GenericLoginGuard
+from src.logging import get_logger
+
+logger = get_logger(__name__)
 
 from .models import (
     Action,
@@ -133,6 +136,13 @@ class ExploreExecutor:
             self._validate_version(batch.actions)
             self._validate_refs(batch.actions)
 
+            action_types = [str(a.action) for a in batch.actions]
+            logger.info(
+                "Explore 执行批次: %d 个操作 [%s]",
+                len(batch.actions),
+                ", ".join(action_types),
+            )
+
             terminator_idx = self._find_terminator(batch.actions)
             last_idx = terminator_idx if terminator_idx is not None else len(batch.actions) - 1
             for action in batch.actions[: last_idx + 1]:
@@ -140,6 +150,10 @@ class ExploreExecutor:
                 result = self._execute_single(action)
                 results.append(result)
                 if not result.success:
+                    logger.warning(
+                        "Explore 操作失败: %s ref=%s error=%s (耗时 %dms)",
+                        result.action, result.ref, result.error, result.duration_ms,
+                    )
                     return ExecutionResult(
                         success=False,
                         status="failed",
@@ -148,6 +162,7 @@ class ExploreExecutor:
                         error_code=result.error_code,
                     )
                 if self._deep_scan_requested:
+                    logger.info("Explore 批次: 深度扫描完成，需要重新快照")
                     return ExecutionResult(
                         success=True,
                         status="deep_scan_completed",
@@ -155,6 +170,7 @@ class ExploreExecutor:
                         need_snapshot=True,
                     )
                 if self._needs_snapshot:
+                    logger.info("Explore 批次: 登录完成，需要重新快照")
                     return ExecutionResult(
                         success=True,
                         status="login_completed",
@@ -163,15 +179,19 @@ class ExploreExecutor:
                     )
 
             if terminator_idx is not None:
+                status = self._terminator_status(batch.actions[terminator_idx])
+                logger.info("Explore 批次完成: 终止符 %s, status=%s", batch.actions[terminator_idx].action, status)
                 return ExecutionResult(
                     success=True,
-                    status=self._terminator_status(batch.actions[terminator_idx]),
+                    status=status,
                     results=results,
                     need_snapshot=True,
                 )
 
+            logger.info("Explore 批次完成: %d 个操作全部成功", len(results))
             return ExecutionResult(success=True, status="success", results=results)
         except ExploreError as exc:
+            logger.warning("Explore 批次异常: %s (error_code=%s)", exc, exc.error_code)
             return ExecutionResult(
                 success=False,
                 status="failed",
@@ -180,6 +200,7 @@ class ExploreExecutor:
                 error_code=exc.error_code,
             )
         except Exception as exc:
+            logger.warning("Explore 执行异常: %s", exc, exc_info=True)
             return ExecutionResult(
                 success=False,
                 status="failed",
@@ -275,6 +296,20 @@ class ExploreExecutor:
 
     def _execute_single(self, action: Action) -> ActionResult:
         start = time.time()
+        # 构建操作描述用于日志
+        action_desc = f"{action.action}"
+        if action.ref:
+            action_desc += f" ref={action.ref}"
+        if action.value:
+            val_preview = str(action.value)[:50]
+            action_desc += f" value={val_preview}"
+        if action.url:
+            action_desc += f" url={action.url}"
+        if action.direction:
+            action_desc += f" direction={action.direction}"
+        if action.x is not None and action.y is not None:
+            action_desc += f" ({action.x},{action.y})"
+        logger.debug("Explore 原子操作开始: %s", action_desc)
         try:
             if action.action not in {
                 ActionType.GOTO,
@@ -290,6 +325,7 @@ class ExploreExecutor:
             }:
                 if self._login_guard.maybe_wait(f"before_{action.action}"):
                     self._needs_snapshot = True
+                    logger.info("Explore 原子操作: %s 触发登录等待，暂停操作", action.action)
                     return ActionResult(
                         action=action.action,
                         ref=action.ref,
@@ -401,13 +437,22 @@ class ExploreExecutor:
                 if self._login_guard.maybe_wait(f"after_{action.action}"):
                     self._needs_snapshot = True
 
-            return ActionResult(
+            result = ActionResult(
                 action=action.action,
                 ref=action.ref,
                 success=True,
                 duration_ms=int((time.time() - start) * 1000),
             )
+            logger.info(
+                "Explore 原子操作成功: %s ref=%s (耗时 %dms)",
+                action.action, action.ref, result.duration_ms,
+            )
+            return result
         except ExploreError as exc:
+            logger.warning(
+                "Explore 原子操作失败: %s ref=%s error=%s (耗时 %dms)",
+                action.action, action.ref, str(exc), int((time.time() - start) * 1000),
+            )
             return ActionResult(
                 action=action.action,
                 ref=action.ref,
@@ -417,6 +462,10 @@ class ExploreExecutor:
                 duration_ms=int((time.time() - start) * 1000),
             )
         except Exception as exc:
+            logger.warning(
+                "Explore 原子操作异常: %s ref=%s error=%s (耗时 %dms)",
+                action.action, action.ref, str(exc), int((time.time() - start) * 1000),
+            )
             return ActionResult(
                 action=action.action,
                 ref=action.ref,

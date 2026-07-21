@@ -395,6 +395,7 @@ skills:
   - id: "domain/github_login"
     name: "GitHub 登录"
     type: "domain"
+    platform: "github"
     triggers: ["github", "登录", "login"]
     url_patterns: ["*.github.com"]
     description: "登录 GitHub 账号"
