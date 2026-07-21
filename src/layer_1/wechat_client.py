@@ -392,118 +392,6 @@ class ScreenImageLocator:
         self._click_xy(match.x, match.y)
         return match
 
-    def click_ocr_text(
-        self,
-        *,
-        region: tuple[int, int, int, int] | str | None = None,
-        text: str = "",
-    ) -> ImageMatch | None:
-        match = self.find_ocr_text(region=region, text=text)
-        if match is None:
-            return None
-        self._click_xy(match.x, match.y)
-        return match
-
-    def find_ocr_text(
-        self,
-        *,
-        region: tuple[int, int, int, int] | str | None = None,
-        text: str = "",
-    ) -> ImageMatch | None:
-        """Find visible text with optional Tesseract OCR."""
-        target = re.sub(r"\s+", "", str(text or ""))
-        if not target:
-            return None
-
-        pytesseract = self._load_pytesseract()
-        if pytesseract is None:
-            return None
-        capture = self._capture_region(region)
-        if capture is None:
-            return None
-        crop, left, top = capture
-        if crop.size == 0:
-            return None
-
-        try:
-            from pytesseract import Output  # type: ignore[import-not-found]
-        except Exception:
-            return None
-
-        data = None
-        for language in ("chi_sim+eng", "eng"):
-            try:
-                data = pytesseract.image_to_data(
-                    crop,
-                    lang=language,
-                    config="--psm 11",
-                    output_type=Output.DICT,
-                )
-                break
-            except Exception:
-                continue
-        if not data:
-            return None
-
-        lines: dict[tuple[Any, ...], list[tuple[str, int, int, int, int]]] = {}
-        count = len(data.get("text", []))
-        for index in range(count):
-            raw_text = str(data["text"][index] or "").strip()
-            normalized = re.sub(r"\s+", "", raw_text)
-            if not normalized:
-                continue
-            try:
-                x = int(data["left"][index])
-                y = int(data["top"][index])
-                width = int(data["width"][index])
-                height = int(data["height"][index])
-            except (KeyError, TypeError, ValueError):
-                continue
-            key = (
-                data.get("block_num", [""] * count)[index],
-                data.get("par_num", [""] * count)[index],
-                data.get("line_num", [""] * count)[index],
-            )
-            lines.setdefault(key, []).append((normalized, x, y, width, height))
-
-        candidates: list[tuple[bool, int, int, ImageMatch]] = []
-        for tokens in lines.values():
-            tokens.sort(key=lambda item: item[1])
-            line_text = "".join(item[0] for item in tokens)
-            if target not in line_text:
-                continue
-            x1 = min(item[1] for item in tokens)
-            y1 = min(item[2] for item in tokens)
-            x2 = max(item[1] + item[3] for item in tokens)
-            y2 = max(item[2] + item[4] for item in tokens)
-            candidates.append(
-                (
-                    line_text == target,
-                    y1,
-                    x1,
-                    ImageMatch(
-                        x=left + (x1 + x2) // 2,
-                        y=top + (y1 + y2) // 2,
-                        score=1.0 if line_text == target else 0.8,
-                        template_name=f"ocr_text:{target}",
-                    ),
-                )
-            )
-
-        if not candidates:
-            return None
-        _exact, _y, _x, match = min(candidates, key=lambda item: (not item[0], item[1], item[2]))
-        return match
-
-    @staticmethod
-    def _load_pytesseract() -> Any | None:
-        try:
-            import pytesseract  # type: ignore[import-not-found]
-
-            return pytesseract
-        except Exception:
-            return None
-
     def find_green_text(
         self,
         *,
@@ -1090,7 +978,7 @@ class WeChatWindowManager:
 
 
 class ElementLocator:
-    """Small Win32 control locator kept for native dialogs only."""
+    """Small UIA-first locator with click and relative-coordinate fallbacks."""
 
     def __init__(self, timeout: float = 8.0) -> None:
         self.timeout = timeout
@@ -1172,7 +1060,7 @@ class PywinautoWechatAutomation:
                 "Install it in the current environment before using this skill."
             ) from exc
 
-        self.desktop = Desktop(backend="win32")
+        self.desktop = Desktop(backend="uia")
         self.window_manager = WeChatWindowManager(self.desktop)
         self.window = self.window_manager.find_main_window()
         if self.window is not None:
@@ -1183,7 +1071,7 @@ class PywinautoWechatAutomation:
             return
 
         exe_path = self._resolve_executable()
-        self.app = Application(backend="win32").start(str(exe_path))
+        self.app = Application(backend="uia").start(str(exe_path))
         if self._wait_for_main_window(timeout=self.wait_timeout):
             return
         raise RuntimeError("Unable to find WeChat window after launch")
@@ -1207,8 +1095,7 @@ class PywinautoWechatAutomation:
                 wait_seconds=SEARCH_RESULT_WINDOW_DETECT_SECONDS,
             ):
                 raise RuntimeError("Unable to activate WeChatAppEx search result window")
-            if not self._click_search_accounts_tab(timeout=3.0):
-                raise RuntimeError("Unable to click WeChatAppEx 账号 tab")
+            self._click_search_accounts_tab(timeout=3.0)
             if self._click_first_account_result_after_tab(
                 account_name,
                 before_handles=before_handles,
@@ -1260,7 +1147,7 @@ class PywinautoWechatAutomation:
         edit = self._find_message_edit()
         if edit is not None:
             edit.click_input()
-            return "win32"
+            return "uia"
         elif self._click_message_box_visual(timeout=2.0):
             return "image"
         else:
@@ -1582,7 +1469,7 @@ class PywinautoWechatAutomation:
         target = self._find_attachment_button()
         if target is not None:
             self._click_element_or_parent(target)
-            return "win32"
+            return "uia"
         if self._click_template(
             WECHAT_ATTACHMENT_TEMPLATE,
             current_window_region=True,
@@ -1889,7 +1776,7 @@ class PywinautoWechatAutomation:
     def _launch_wechat_by_name(self, application_cls: Any) -> bool:
         for launch_name in WECHAT_LAUNCH_NAMES:
             try:
-                self.app = application_cls(backend="win32").start(launch_name)
+                self.app = application_cls(backend="uia").start(launch_name)
             except Exception:
                 logger.debug(
                     "Failed to start WeChat by name with pywinauto: %s",
@@ -2635,38 +2522,15 @@ class PywinautoWechatAutomation:
             target = self._find_search_accounts_tab()
             if target is not None:
                 self._click_element_or_parent(target)
-                self._wait_for_search_accounts_tab_refresh()
+                time.sleep(SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS)
                 return True
             if time.time() >= deadline:
                 break
             time.sleep(0.2)
-
-        self._normalize_windows_for_screenshot()
-        locator = getattr(self, "image_locator", None)
-        if locator is not None and hasattr(locator, "click_ocr_text"):
-            try:
-                match = locator.click_ocr_text(
-                    region=self._current_window_region(),
-                    text="账号",
-                )
-            except Exception:
-                match = None
-            if match is not None:
-                self._wait_for_search_accounts_tab_refresh()
-                return True
-
         clicked = self._click_window_relative(*SEARCH_ACCOUNTS_TAB_REL)
         if clicked:
-            self._wait_for_search_accounts_tab_refresh()
+            time.sleep(SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS)
         return clicked
-
-    def _wait_for_search_accounts_tab_refresh(self) -> None:
-        """Wait for the account-results page to refresh, then re-normalize it."""
-        time.sleep(SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS)
-        try:
-            self._normalize_current_window()
-        except Exception:
-            self._normalize_windows_for_screenshot()
 
     def _find_search_accounts_tab(self) -> Any | None:
         self._require_window()
@@ -2926,7 +2790,7 @@ class PywinautoWechatAutomation:
             from pywinauto import Desktop  # type: ignore[import-not-found]
         except Exception:
             return None
-        self.desktop = Desktop(backend="win32")
+        self.desktop = Desktop(backend="uia")
         return self.desktop
 
     def _windows_to_scan(self) -> list[Any]:

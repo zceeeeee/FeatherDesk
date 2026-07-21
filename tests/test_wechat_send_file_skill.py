@@ -257,7 +257,7 @@ def test_chat_input_file_paste_presses_enter_exactly_once(monkeypatch, tmp_path:
     monkeypatch.setattr(
         automation,
         "_focus_message_input",
-        lambda: actions.append("focus_chat_input") or "win32",
+        lambda: actions.append("focus_chat_input") or "uia",
     )
     monkeypatch.setattr(automation, "_snapshot_file_markers", lambda name: set())
     monkeypatch.setattr(
@@ -308,7 +308,7 @@ def test_chat_input_file_returns_submitted_when_ui_verification_is_unavailable(
     monkeypatch.setattr(wechat_module, "validate_local_file", lambda value: validated)
     monkeypatch.setattr(wechat_module, "revalidate_local_file", lambda value: None)
     monkeypatch.setattr(automation, "_normalize_current_window", lambda: None)
-    monkeypatch.setattr(automation, "_focus_message_input", lambda: "win32")
+    monkeypatch.setattr(automation, "_focus_message_input", lambda: "uia")
     monkeypatch.setattr(automation, "_snapshot_file_markers", lambda name: set())
     monkeypatch.setattr(
         automation,
@@ -346,7 +346,7 @@ def test_send_file_falls_back_to_native_dialog_before_paste(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(wechat_module, "validate_local_file", lambda value: validated)
     monkeypatch.setattr(automation, "_normalize_current_window", lambda: None)
-    monkeypatch.setattr(automation, "_focus_message_input", lambda: "win32")
+    monkeypatch.setattr(automation, "_focus_message_input", lambda: "uia")
     monkeypatch.setattr(automation, "_snapshot_file_markers", lambda name: set())
     monkeypatch.setattr(
         automation,
