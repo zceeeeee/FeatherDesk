@@ -132,6 +132,9 @@ class SnapshotResponse(BaseModel):
     aria_quality: float = Field(1.0, ge=0.0, le=1.0)
     surface_stats: SurfaceStats = Field(default_factory=SurfaceStats)
     vision_enhanced: bool = False
+    ocr_enhanced: bool = False
+    ocr_summary: str = ""
+    ocr_targets: list[VisualTarget] = Field(default_factory=list)
     visual_summary: str = ""
     visual_targets: list[VisualTarget] = Field(default_factory=list)
     screenshot_meta: Optional[ScreenshotMeta] = None
@@ -307,6 +310,10 @@ class ExploreConfig(BaseModel):
     vision_max_screenshot_bytes: int = 4_000_000
     vision_strong_canvas_ratio: float = 0.50
     vision_sensitive_action_policy: str = "block"
+    # OCR 配置
+    ocr_enabled: bool = True
+    ocr_language: str = "zh-CN"
+    ocr_max_words: int = 30
     interactive_roles: list[str] = Field(
         default_factory=lambda: [
             "button",

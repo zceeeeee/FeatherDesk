@@ -424,7 +424,8 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     LLM_MAX_TOKENS: stored.maxTokens || "4096",
     BROWSER_HEADLESS: stored.browserHeadless || "false",
     DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",
-    USE_CLOAKBROWSER: stored.useCloakBrowser || "true"
+    USE_CLOAKBROWSER: stored.useCloakBrowser || "true",
+    EXPLORE_OCR_ENABLED: stored.exploreOcrEnabled || "true"
   });
   if (provider === "anthropic") {
     env.ANTHROPIC_API_KEY = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -610,6 +611,7 @@ function registerIpc(): void {
       browserHeadless: settings.browserHeadless === "true",
       maxSteps,
       useCloakBrowser: settings.useCloakBrowser !== "false",
+      exploreOcrEnabled: settings.exploreOcrEnabled !== "false",
       apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : ""
     };
   });
@@ -640,6 +642,7 @@ function registerIpc(): void {
       Math.min(100, Math.max(5, Math.round(Number(incoming.maxSteps ?? 20)) || 20))
     );
     existing.useCloakBrowser = String(incoming.useCloakBrowser !== false);
+    existing.exploreOcrEnabled = String(incoming.exploreOcrEnabled !== false);
     writeJson(userFile("settings.json"), existing);
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };

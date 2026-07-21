@@ -124,6 +124,7 @@ export interface DesktopSettings {
   browserHeadless: boolean;
   maxSteps: number;
   useCloakBrowser: boolean;
+  exploreOcrEnabled: boolean;
 }
 
 export interface ApiConnectionTestResult {

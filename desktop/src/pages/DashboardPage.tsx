@@ -141,7 +141,8 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
     requestTimeout: 60,
     browserHeadless: false,
     maxSteps: 20,
-    useCloakBrowser: true
+    useCloakBrowser: true,
+    exploreOcrEnabled: true
   });
   const [saved, setSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -232,6 +233,7 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
         <div className="settings-form">
           <label className="toggle-row"><span><strong>无头模式</strong><small>后台运行浏览器，不显示窗口</small></span><input type="checkbox" checked={settings.browserHeadless} onChange={(event) => setSettings({ ...settings, browserHeadless: event.target.checked })} /></label>
           <label className="toggle-row"><span><strong>启用 CloakBrowser</strong><small>使用带反检测能力的浏览器引擎；关闭后使用 Chromium。</small></span><input type="checkbox" checked={settings.useCloakBrowser} onChange={(event) => setSettings({ ...settings, useCloakBrowser: event.target.checked })} /></label>
+          <label className="toggle-row"><span><strong>Explore 文字识别 (OCR)</strong><small>在 ARIA 快照信息不足时，使用 Windows OCR 识别页面文字作为兜底定位方案。仅 Windows 生效。</small></span><input type="checkbox" checked={settings.exploreOcrEnabled} onChange={(event) => setSettings({ ...settings, exploreOcrEnabled: event.target.checked })} /></label>
           <label>最大循环步数<input type="number" min="5" max="100" step="1" value={settings.maxSteps} onChange={(event) => setSettings({ ...settings, maxSteps: Number(event.target.value) })} /><small className="field-help">单个任务最多执行 5–100 步，默认 20 步。</small></label>
           <button className="button-secondary" onClick={() => void apiRequest("/api/browser/close", { method: "POST" })}>关闭当前浏览器</button>
         </div>

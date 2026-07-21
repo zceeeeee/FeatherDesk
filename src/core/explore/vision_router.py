@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from src.logging import get_logger
+
 from .models import (
     ExploreConfig,
     ScreenshotMeta,
@@ -16,6 +18,8 @@ from .models import (
     SurfaceStats,
     VisualTarget,
 )
+
+logger = get_logger(__name__)
 
 
 class VisionBudgetExceeded(RuntimeError):
@@ -174,6 +178,97 @@ class VisionRouter:
         snapshot.visual_summary = str(analysis.summary)[:1000]
         snapshot.visual_targets = targets
         snapshot.vision_enhanced = True
+        return snapshot
+
+    # ── OCR Enhancement ──────────────────────────────────────────────
+
+    @property
+    def ocr_available(self) -> bool:
+        """Check if Windows OCR is available (platform + config)."""
+        if not self._config.ocr_enabled:
+            return False
+        try:
+            from src.core.ocr import get_ocr_module
+            return get_ocr_module(language=self._config.ocr_language) is not None
+        except Exception:
+            return False
+
+    def ocr_enhance(
+        self,
+        page: Any,
+        snapshot: SnapshotResponse,
+        task: str,
+        max_words: int | None = None,
+    ) -> SnapshotResponse:
+        """Enrich snapshot with OCR-detected text targets.
+
+        Runs Windows OCR on the viewport screenshot and attaches matching
+        text as ``ocr_targets`` with ``o``-prefix refs.
+        """
+        import asyncio
+
+        from src.core.ocr import get_ocr_module
+
+        ocr = get_ocr_module(language=self._config.ocr_language)
+        if ocr is None:
+            logger.warning("OCR module unavailable")
+            return snapshot
+
+        screenshot = page.screenshot(type="png", full_page=False)
+
+        stats = snapshot.surface_stats
+        vw = max(1, stats.viewport_width)
+        vh = max(1, stats.viewport_height)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, ocr.recognize(screenshot, vw, vh))
+                ocr_result = future.result(timeout=15)
+        else:
+            ocr_result = asyncio.run(ocr.recognize(screenshot, vw, vh))
+
+        limit = max_words or self._config.ocr_max_words
+        targets: list[VisualTarget] = []
+        for word in ocr_result.words[:limit]:
+            targets.append(
+                VisualTarget(
+                    ref=f"o{len(targets) + 1}",
+                    description=word.text[:200],
+                    role="text",
+                    x=max(0.0, min(1.0, word.x)),
+                    y=max(0.0, min(1.0, word.y)),
+                    width=max(0.0, min(1.0 - word.x, word.width)),
+                    height=max(0.0, min(1.0 - word.y, word.height)),
+                    confidence=0.7,
+                )
+            )
+
+        snapshot.ocr_targets = targets
+        snapshot.ocr_summary = ocr_result.raw_text[:1000]
+        snapshot.ocr_enhanced = True
+
+        # Ensure screenshot_meta is set for coordinate conversion in executor
+        if snapshot.screenshot_meta is None:
+            scroll = self._read_scroll(page)
+            snapshot.screenshot_meta = ScreenshotMeta(
+                url=snapshot.url,
+                viewport_width=vw,
+                viewport_height=vh,
+                scroll_x=scroll[0],
+                scroll_y=scroll[1],
+                navigation_epoch=0,
+            )
+        logger.info(
+            "OCR enhanced: %d targets from %d words",
+            len(targets),
+            len(ocr_result.words),
+        )
         return snapshot
 
     def _make_vision_module(self, module_type):
