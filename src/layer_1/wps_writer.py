@@ -213,6 +213,9 @@ def _resolve_paths(
         if normalized_docx_path
         else base_dir / f"{base_name}.pdf"
     )
+    if file_stem:
+        docx = docx.with_name(f"{file_stem}.docx")
+        pdf = pdf.with_name(f"{file_stem}.pdf")
     docx.parent.mkdir(parents=True, exist_ok=True)
     pdf.parent.mkdir(parents=True, exist_ok=True)
     return docx.resolve(strict=False), pdf.resolve(strict=False)
@@ -792,6 +795,22 @@ def _export_pdf(doc: Any, pdf_path: Path) -> None:
         doc.SaveAs2(str(pdf_path), PDF_FORMAT)
 
 
+def _finalize_document_saved_state(doc: Any, word_was_saved: bool) -> None:
+    if word_was_saved:
+        try:
+            doc.Save()
+        except Exception as exc:
+            raise RuntimeError("WPS document could not be finalized after export") from exc
+        return
+
+    # PDF-only output intentionally has no Word file. Mark the temporary editor
+    # clean so closing it does not ask the user to save an unwanted DOCX copy.
+    try:
+        doc.Saved = True
+    except Exception:
+        pass
+
+
 def export_article_to_pdf(
     title: str,
     body: str,
@@ -948,6 +967,10 @@ def export_article_to_pdf(
     if normalized_output_format in {"pdf", "both"}:
         _export_pdf(doc, pdf)
         saved_pdf = str(pdf)
+    _finalize_document_saved_state(
+        doc,
+        word_was_saved=normalized_output_format in {"word", "both"},
+    )
 
     if not keep_open:
         try:
