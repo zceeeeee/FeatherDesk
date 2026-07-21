@@ -489,7 +489,7 @@ def test_wechat_clicks_green_account_text_before_visual_position(monkeypatch):
     assert image_locator.xy_clicks == []
 
 
-def test_wechat_first_account_result_prefers_green_text_after_tab(monkeypatch):
+def test_wechat_first_account_result_clicks_fixed_point_after_tab(monkeypatch):
     monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
     image_locator = FakeImageLocator()
     image_locator.first_green_text_matches = [object()]
@@ -516,7 +516,8 @@ def test_wechat_first_account_result_prefers_green_text_after_tab(monkeypatch):
         before_handles={1},
     )
 
-    assert image_locator.first_green_text_calls == [((0, 0, 1000, 800), "火眼审阅")]
+    assert image_locator.xy_clicks == [(440, 460)]
+    assert image_locator.first_green_text_calls == []
     assert text_row.clicked is False
     assert confirmed == [("火眼审阅", {1})]
 
@@ -559,9 +560,10 @@ def test_wechat_clicks_accounts_tab_by_window_relative_fallback(monkeypatch):
 def test_wechat_normalizes_window_after_accounts_tab_refresh(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(wechat_module.time, "sleep", lambda seconds: sleeps.append(seconds))
-    accounts_tab = FakeUiElement("账号")
-    window = FakeUiElement("火眼审阅", [accounts_tab], process_name="WeChatAppEx.exe")
-    automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
+    image_locator = FakeImageLocator()
+    image_locator.ocr_matches = [object()]
+    window = FakeUiElement("火眼审阅", process_name="WeChatAppEx.exe")
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
     automation.window = window
     normalized: list[str] = []
     automation._normalize_current_window = lambda: normalized.append("after-tab")
@@ -618,10 +620,17 @@ def test_wechat_search_result_window_wait_retries_until_app_ex_available(monkeyp
 
     monkeypatch.setattr(wechat_module.time, "sleep", fake_sleep)
     automation = PywinautoWechatAutomation()
-    calls: list[tuple[str, float, set[int] | None]] = []
+    calls: list[tuple[str, float, set[int] | None, bool]] = []
 
-    def fake_switch(account_name, timeout=6.0, before_handles=None):
-        calls.append((account_name, timeout, before_handles))
+    def fake_switch(
+        account_name,
+        timeout=6.0,
+        before_handles=None,
+        allow_taskbar_activation=True,
+    ):
+        calls.append(
+            (account_name, timeout, before_handles, allow_taskbar_activation)
+        )
         return len(calls) >= 2
 
     automation._switch_to_account_window = fake_switch
@@ -632,8 +641,28 @@ def test_wechat_search_result_window_wait_retries_until_app_ex_available(monkeyp
         wait_seconds=1.0,
     )
     assert len(calls) >= 2
-    assert calls[0] == ("火眼审阅", 1.0, {1})
+    assert calls[0] == ("火眼审阅", 1.0, {1}, False)
     assert sleeps
+
+
+def test_wechat_search_result_rejects_main_window_with_matching_text(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    main_window = FakeUiElement(
+        "微信",
+        [FakeUiElement("火眼审阅")],
+        process_name="WeChat.exe",
+    )
+    automation = PywinautoWechatAutomation()
+    automation.window = main_window
+    automation.desktop = FakeDesktop([main_window])
+
+    assert not automation._switch_to_account_window(
+        "火眼审阅",
+        timeout=0.01,
+        before_handles={PywinautoWechatAutomation._window_handle(main_window)},
+        allow_taskbar_activation=False,
+    )
+    assert automation.window is main_window
 
 
 def test_wechat_clicks_contact_row_and_avoids_official_account_result():
@@ -671,9 +700,9 @@ def test_wechat_contact_search_does_not_click_search_input():
     assert contact_row.clicked is True
 
 
-def test_wechat_official_search_clicks_souyisou_template(monkeypatch):
+def test_wechat_official_search_submits_with_enter_then_uses_ocr_accounts_tab(monkeypatch):
     monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
-    image_locator = FakeImageLocator(matches=[object()])
+    image_locator = FakeImageLocator()
     automation = PywinautoWechatAutomation(image_locator=image_locator)
     automation.window = FakeUiElement("微信", process_name="WeChat.exe")
     sent: list[str] = []
@@ -702,15 +731,88 @@ def test_wechat_official_search_clicks_souyisou_template(monkeypatch):
             ("fallback", account, before_handles)
         )
     )
+    main_handle = PywinautoWechatAutomation._window_handle(automation.window)
 
     automation.search_official_account("火眼审阅")
 
-    assert ("搜一搜.png", None, 0.74) in image_locator.calls
-    assert sent == ["^f", "^a", "火眼审阅"]
+    assert image_locator.calls == []
+    assert sent == ["^f", "^a", "火眼审阅", "{ENTER}"]
     assert actions == [
-        ("wait", "火眼审阅", ({1}, SEARCH_RESULT_WINDOW_DETECT_SECONDS)),
-        ("tab", "账号", 3.0),
+        (
+            "wait",
+            "火眼审阅",
+            ({main_handle}, SEARCH_RESULT_WINDOW_DETECT_SECONDS),
+        ),
+        ("tab", "账号", 10.0),
         ("first", "火眼审阅", {1}),
+    ]
+
+
+def test_wechat_official_search_waits_between_keyboard_steps(monkeypatch):
+    events: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        wechat_module.time,
+        "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+    automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
+    automation.window = FakeUiElement("微信", process_name="WeChat.exe")
+    automation._normalize_current_window = lambda: None
+    automation._snapshot_window_handles = lambda: events.append(
+        ("snapshot", None)
+    ) or {1}
+    automation._send_keys = lambda keys: events.append(("keys", keys))
+    automation._paste_or_type = lambda text: events.append(("input", text))
+    automation._wait_for_search_result_window = lambda *args, **kwargs: events.append(
+        ("detect", None)
+    ) or True
+    automation._click_search_accounts_tab = lambda timeout=3.0: True
+    automation._click_first_account_result_after_tab = lambda *args, **kwargs: True
+
+    automation.search_official_account("火眼审阅")
+
+    assert events[:6] == [
+        ("keys", "^f"),
+        ("sleep", 0.5),
+        ("keys", "^a"),
+        ("input", "火眼审阅"),
+        ("sleep", 0.5),
+        ("keys", "{ENTER}"),
+    ]
+    assert events[6:8] == [("detect", None), ("snapshot", None)]
+
+
+def test_wechat_official_search_retries_enter_when_appex_does_not_open(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
+    automation.window = FakeUiElement("微信", process_name="WeChat.exe")
+    sent: list[str] = []
+    normalizations: list[object] = []
+    wait_results = iter([False, True])
+    waits: list[tuple[str, set[int] | None, float]] = []
+    automation._normalize_current_window = lambda: normalizations.append(
+        automation.window
+    )
+    automation._snapshot_window_handles = lambda: {1}
+    automation._send_keys = lambda keys: sent.append(keys)
+    automation._paste_or_type = lambda _text: None
+
+    def fake_wait(account, *, before_handles, wait_seconds):
+        waits.append((account, before_handles, wait_seconds))
+        return next(wait_results)
+
+    automation._wait_for_search_result_window = fake_wait
+    automation._click_search_accounts_tab = lambda timeout=3.0: True
+    automation._click_first_account_result_after_tab = lambda *args, **kwargs: True
+    main_handle = PywinautoWechatAutomation._window_handle(automation.window)
+
+    automation.search_official_account("火眼审阅")
+
+    assert sent.count("{ENTER}") == 2
+    assert len(normalizations) == 2
+    assert waits == [
+        ("火眼审阅", {main_handle}, SEARCH_RESULT_WINDOW_DETECT_SECONDS),
+        ("火眼审阅", {main_handle}, SEARCH_RESULT_WINDOW_DETECT_SECONDS),
     ]
 
 
@@ -817,6 +919,7 @@ def test_wechat_template_click_normalizes_window_before_screenshot(monkeypatch):
     assert automation._click_message_box_visual(timeout=0.0)
 
     assert window.moved_to == (0, 0, 960, 1040)
+    assert window.focused is False
     assert image_locator.calls == [("wechatSend.png", (0, 0, 960, 1040), 0.72)]
 
 
@@ -899,6 +1002,26 @@ def test_wechat_switch_clicks_appex_taskbar_icon_when_window_is_hidden(monkeypat
     )
     assert automation.window is detail_window
     assert ("WeChatAppExLogo.png", "taskbar", 0.72) in image_locator.calls
+
+
+def test_wechat_switch_skips_taskbar_while_waiting_for_new_appex(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    main_window = FakeUiElement("微信", process_name="WeChat.exe")
+    automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
+    automation.window = main_window
+    automation.desktop = FakeDesktop([main_window])
+    taskbar_attempts: list[float] = []
+    automation._activate_appex_from_taskbar = (
+        lambda *, timeout=2.0: taskbar_attempts.append(timeout) or False
+    )
+
+    assert not automation._switch_to_account_window(
+        "火眼审阅",
+        timeout=0.0,
+        before_handles={PywinautoWechatAutomation._window_handle(main_window)},
+        allow_taskbar_activation=False,
+    )
+    assert taskbar_attempts == []
 
 
 def test_wechat_open_starts_by_name_before_taskbar_click(monkeypatch):

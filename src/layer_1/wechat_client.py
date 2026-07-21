@@ -56,8 +56,10 @@ CHAT_INPUT_REL = (0.58, 0.88)
 SEARCH_ACCOUNTS_TAB_REL = (0.24, 0.14)
 SEARCH_RESULT_REGION_SIZE = (1120, 680)
 SEARCH_RESULT_FIRST_ACCOUNT_OFFSET = (240, 240)
+SEARCH_RESULT_FIRST_ACCOUNT_POINT = (440, 460)
 SEARCH_RESULT_WINDOW_DETECT_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS = 5.0
+SEARCH_ACCOUNTS_TAB_TIMEOUT = 10.0
 FOLLOW_CONFIRM_SECONDS = 20.0
 WECHAT_FOLLOW_BUTTON_RGB = (0x55, 0xBC, 0x7A)
 ATTACHMENT_BUTTON_NAMES = ("发送文件", "文件", "添加", "更多", "Send file", "File")
@@ -949,8 +951,10 @@ class WeChatWindowManager:
     def normalize(self, window: Any, *, app_ex: bool = False, focus: bool = True) -> Any:
         x, y, width, height = self._target_rect(app_ex=app_ex)
         move_error: Exception | None = None
+        hwnd = PywinautoWechatAutomation._window_handle(window)
+        native_window = self._is_native_window_handle(hwnd)
         moved = self._set_window_pos(window, x, y, width, height)
-        if not moved:
+        if not moved and not native_window:
             try:
                 window.restore()
             except Exception:
@@ -973,10 +977,13 @@ class WeChatWindowManager:
                 move_error or "SetWindowPos returned false",
             )
         if focus:
-            try:
-                window.set_focus()
-            except Exception:
-                pass
+            if native_window:
+                self._focus_native_window(hwnd)
+            else:
+                try:
+                    window.set_focus()
+                except Exception:
+                    pass
         time.sleep(0.2)
         return window
 
@@ -996,10 +1003,10 @@ class WeChatWindowManager:
             return False
         try:
             user32 = ctypes.windll.user32
-            sw_restore = 9
             swp_nozorder = 0x0004
             swp_noactivate = 0x0010
-            user32.ShowWindow(int(hwnd), sw_restore)
+            if user32.IsIconic(int(hwnd)):
+                user32.ShowWindow(int(hwnd), 9)
             return bool(
                 user32.SetWindowPos(
                     int(hwnd),
@@ -1011,6 +1018,24 @@ class WeChatWindowManager:
                     swp_nozorder | swp_noactivate,
                 )
             )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_native_window_handle(hwnd: int | None) -> bool:
+        if not hwnd:
+            return False
+        try:
+            return bool(ctypes.windll.user32.IsWindow(int(hwnd)))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _focus_native_window(hwnd: int | None) -> bool:
+        if not hwnd:
+            return False
+        try:
+            return bool(ctypes.windll.user32.SetForegroundWindow(int(hwnd)))
         except Exception:
             return False
 
@@ -1080,13 +1105,7 @@ class WeChatWindowManager:
         if not text:
             return False
         title = PywinautoWechatAutomation._element_text(window)
-        if text in title:
-            return True
-        try:
-            descendants = window.descendants()
-        except Exception:
-            descendants = []
-        return any(text in PywinautoWechatAutomation._element_text(item) for item in descendants[:120])
+        return text in title
 
 
 class ElementLocator:
@@ -1191,32 +1210,41 @@ class PywinautoWechatAutomation:
     def search_official_account(self, account_name: str) -> None:
         self._require_window()
         self._normalize_current_window()
-        before_handles = self._snapshot_window_handles()
+        main_handle = self._window_handle(self.window)
+        search_before_handles = {main_handle} if main_handle else set()
         self._send_keys("^f")
-        time.sleep(0.2)
+        time.sleep(0.5)
         self._send_keys("^a")
         self._paste_or_type(account_name)
-        clicked_global_search = self._click_souyisou_if_visible(timeout=0.8)
-        if not clicked_global_search:
+        time.sleep(0.5)
+        self._send_keys("{ENTER}")
+        if not self._wait_for_search_result_window(
+            account_name,
+            before_handles=search_before_handles,
+            wait_seconds=SEARCH_RESULT_WINDOW_DETECT_SECONDS,
+        ):
+            self._normalize_current_window()
             self._send_keys("{ENTER}")
-            clicked_global_search = self._click_souyisou_if_visible(timeout=1.2)
-        if clicked_global_search:
             if not self._wait_for_search_result_window(
                 account_name,
-                before_handles=before_handles,
+                before_handles=search_before_handles,
                 wait_seconds=SEARCH_RESULT_WINDOW_DETECT_SECONDS,
             ):
-                raise RuntimeError("Unable to activate WeChatAppEx search result window")
-            if not self._click_search_accounts_tab(timeout=3.0):
-                raise RuntimeError("Unable to click WeChatAppEx 账号 tab")
-            if self._click_first_account_result_after_tab(
-                account_name,
-                before_handles=before_handles,
-            ):
-                return
-        else:
-            time.sleep(1.5)
-        self._click_service_account_result(account_name, before_handles=before_handles)
+                raise RuntimeError(
+                    "Unable to activate WeChatAppEx search result window"
+                )
+        detail_before_handles = self._snapshot_window_handles()
+        if not self._click_search_accounts_tab(timeout=SEARCH_ACCOUNTS_TAB_TIMEOUT):
+            raise RuntimeError("Unable to click WeChatAppEx 账号 tab")
+        if self._click_first_account_result_after_tab(
+            account_name,
+            before_handles=detail_before_handles,
+        ):
+            return
+        self._click_service_account_result(
+            account_name,
+            before_handles=detail_before_handles,
+        )
 
     def search_contact(self, contact_name: str) -> None:
         self._require_window()
@@ -1657,6 +1685,7 @@ class PywinautoWechatAutomation:
                 return int(rect.top), int(rect.width())
             except Exception:
                 return 0, 0
+
         edits.sort(key=score, reverse=True)
         return edits[0]
 
@@ -2142,7 +2171,8 @@ class PywinautoWechatAutomation:
     def _normalize_windows_for_screenshot(self) -> None:
         manager = self._get_window_manager(create=False)
         if manager is not None:
-            manager.normalize_all(active_window=self.window)
+            # Screenshot capture must not repeatedly steal focus from WeChatAppEx.
+            manager.normalize_all(active_window=None)
             return
         if self.window is None:
             return
@@ -2632,28 +2662,30 @@ class PywinautoWechatAutomation:
     def _click_search_accounts_tab(self, *, timeout: float = 3.0) -> bool:
         deadline = time.time() + max(0.0, timeout)
         while True:
-            target = self._find_search_accounts_tab()
-            if target is not None:
-                self._click_element_or_parent(target)
-                self._wait_for_search_accounts_tab_refresh()
-                return True
+            self._normalize_windows_for_screenshot()
+            locator = getattr(self, "image_locator", None)
+            if locator is not None and hasattr(locator, "click_ocr_text"):
+                try:
+                    match = locator.click_ocr_text(
+                        region=self._current_window_region(),
+                        text="账号",
+                    )
+                except Exception:
+                    match = None
+                if match is not None:
+                    self._wait_for_search_accounts_tab_refresh()
+                    return True
+
             if time.time() >= deadline:
                 break
             time.sleep(0.2)
 
-        self._normalize_windows_for_screenshot()
-        locator = getattr(self, "image_locator", None)
-        if locator is not None and hasattr(locator, "click_ocr_text"):
-            try:
-                match = locator.click_ocr_text(
-                    region=self._current_window_region(),
-                    text="账号",
-                )
-            except Exception:
-                match = None
-            if match is not None:
-                self._wait_for_search_accounts_tab_refresh()
-                return True
+        # Keep the control-tree and coordinate paths as fallbacks when OCR is unavailable.
+        target = self._find_search_accounts_tab()
+        if target is not None:
+            self._click_element_or_parent(target)
+            self._wait_for_search_accounts_tab_refresh()
+            return True
 
         clicked = self._click_window_relative(*SEARCH_ACCOUNTS_TAB_REL)
         if clicked:
@@ -2686,6 +2718,13 @@ class PywinautoWechatAutomation:
         *,
         before_handles: set[int] | None,
     ) -> bool:
+        if self._click_screen_point(*SEARCH_RESULT_FIRST_ACCOUNT_POINT):
+            if self._confirm_after_search_result_click(
+                account_name,
+                before_handles=before_handles,
+            ):
+                return True
+
         if self._click_green_account_text(account_name, timeout=1.2):
             if self._confirm_after_search_result_click(
                 account_name,
@@ -2811,6 +2850,18 @@ class PywinautoWechatAutomation:
         time.sleep(0.35)
         return True
 
+    def _click_screen_point(self, x: int, y: int) -> bool:
+        locator = getattr(self, "image_locator", None)
+        try:
+            if locator is not None and hasattr(locator, "click_xy"):
+                locator.click_xy(x, y)
+            else:
+                ScreenImageLocator._click_xy(x, y)
+        except Exception:
+            return False
+        time.sleep(0.35)
+        return True
+
     def _wait_for_search_result_window(
         self,
         account_name: str,
@@ -2825,6 +2876,7 @@ class PywinautoWechatAutomation:
                 account_name,
                 timeout=min(1.0, max(0.1, remaining)),
                 before_handles=before_handles,
+                allow_taskbar_activation=False,
             ):
                 return True
             remaining = deadline - time.time()
@@ -2845,6 +2897,7 @@ class PywinautoWechatAutomation:
         account_name: str,
         timeout: float = 6.0,
         before_handles: set[int] | None = None,
+        allow_taskbar_activation: bool = True,
     ) -> bool:
         manager = self._get_window_manager(create=False)
         if manager is not None:
@@ -2862,7 +2915,9 @@ class PywinautoWechatAutomation:
         if desktop is None:
             return False
 
-        if self._activate_appex_from_taskbar(timeout=min(2.0, timeout)):
+        if allow_taskbar_activation and self._activate_appex_from_taskbar(
+            timeout=min(2.0, timeout)
+        ):
             manager = self._get_window_manager(create=False)
             if manager is not None:
                 new_appex = manager.latest_new_appex(
@@ -2876,45 +2931,20 @@ class PywinautoWechatAutomation:
                     return True
 
         deadline = time.time() + timeout
-        fallback = None
         while time.time() < deadline:
             for window in self._iter_wechat_windows(desktop, title_hint=account_name):
                 process_name = self._window_process_name(window)
-                title = self._element_text(window)
-                has_account_hint = bool(account_name and account_name in title)
-                if not has_account_hint:
-                    combined = self._combined_text(window)
-                    has_account_hint = account_name in combined
-                if process_name == "wechatappex.exe":
-                    self.window = (
-                        manager.normalize(window, app_ex=True)
-                        if manager is not None
-                        else window
-                    )
-                    if manager is not None:
-                        manager.normalize_all(active_window=self.window)
-                    return True
-                if has_account_hint:
-                    fallback = window
-            if fallback is not None and time.time() + 0.3 >= deadline:
+                if process_name != "wechatappex.exe":
+                    continue
                 self.window = (
-                    manager.normalize(fallback)
+                    manager.normalize(window, app_ex=True)
                     if manager is not None
-                    else fallback
+                    else window
                 )
                 if manager is not None:
                     manager.normalize_all(active_window=self.window)
                 return True
             time.sleep(0.3)
-        if fallback is not None:
-            self.window = (
-                manager.normalize(fallback)
-                if manager is not None
-                else fallback
-            )
-            if manager is not None:
-                manager.normalize_all(active_window=self.window)
-            return True
         return False
 
     def _get_desktop(self, *, create: bool = True) -> Any:
