@@ -489,7 +489,7 @@ def test_wechat_clicks_green_account_text_before_visual_position(monkeypatch):
     assert image_locator.xy_clicks == []
 
 
-def test_wechat_first_account_result_prefers_green_text_after_tab(monkeypatch):
+def test_wechat_first_account_result_clicks_fixed_point_after_tab(monkeypatch):
     monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
     image_locator = FakeImageLocator()
     image_locator.first_green_text_matches = [object()]
@@ -516,7 +516,8 @@ def test_wechat_first_account_result_prefers_green_text_after_tab(monkeypatch):
         before_handles={1},
     )
 
-    assert image_locator.first_green_text_calls == [((0, 0, 1000, 800), "火眼审阅")]
+    assert image_locator.xy_clicks == [(440, 460)]
+    assert image_locator.first_green_text_calls == []
     assert text_row.clicked is False
     assert confirmed == [("火眼审阅", {1})]
 

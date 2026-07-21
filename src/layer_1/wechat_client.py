@@ -56,6 +56,7 @@ CHAT_INPUT_REL = (0.58, 0.88)
 SEARCH_ACCOUNTS_TAB_REL = (0.24, 0.14)
 SEARCH_RESULT_REGION_SIZE = (1120, 680)
 SEARCH_RESULT_FIRST_ACCOUNT_OFFSET = (240, 240)
+SEARCH_RESULT_FIRST_ACCOUNT_POINT = (440, 460)
 SEARCH_RESULT_WINDOW_DETECT_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_TIMEOUT = 10.0
@@ -2717,6 +2718,13 @@ class PywinautoWechatAutomation:
         *,
         before_handles: set[int] | None,
     ) -> bool:
+        if self._click_screen_point(*SEARCH_RESULT_FIRST_ACCOUNT_POINT):
+            if self._confirm_after_search_result_click(
+                account_name,
+                before_handles=before_handles,
+            ):
+                return True
+
         if self._click_green_account_text(account_name, timeout=1.2):
             if self._confirm_after_search_result_click(
                 account_name,
@@ -2837,6 +2845,18 @@ class PywinautoWechatAutomation:
                 pass
         try:
             self._click_relative(self.window, rx, ry)
+        except Exception:
+            return False
+        time.sleep(0.35)
+        return True
+
+    def _click_screen_point(self, x: int, y: int) -> bool:
+        locator = getattr(self, "image_locator", None)
+        try:
+            if locator is not None and hasattr(locator, "click_xy"):
+                locator.click_xy(x, y)
+            else:
+                ScreenImageLocator._click_xy(x, y)
         except Exception:
             return False
         time.sleep(0.35)
