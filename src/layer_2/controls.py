@@ -756,6 +756,28 @@ def wps_writer_export(
     )
 
 
+def wps_document_read(document_path: str) -> dict:
+    """Read text from an existing local WPS Writer or Word document."""
+    from src.layer_1.wps_writer import read_wps_document
+
+    return read_wps_document(document_path)
+
+
+def wps_document_rewrite(
+    document_path: str,
+    markdown_text: str,
+    keep_open: bool = True,
+) -> dict:
+    """Back up and rewrite an existing local document from Markdown."""
+    from src.layer_1.wps_writer import rewrite_wps_document
+
+    return rewrite_wps_document(
+        document_path,
+        markdown_text,
+        keep_open=keep_open,
+    )
+
+
 def wechat_follow_official_account(
     account_name: str,
     message: str | None = None,
@@ -865,6 +887,8 @@ def get_controls_exports() -> Dict[str, Any]:
         "press_key": press_key,
         "upload_file": upload_file,
         "wps_writer_export": wps_writer_export,
+        "wps_document_read": wps_document_read,
+        "wps_document_rewrite": wps_document_rewrite,
         "taobao_collect_products": taobao_collect_products,
         "wechat_follow_official_account": wechat_follow_official_account,
         "wechat_send_official_account_message": wechat_send_official_account_message,

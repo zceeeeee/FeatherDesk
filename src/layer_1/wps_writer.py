@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -96,6 +97,9 @@ def _safe_file_stem(value: str) -> str:
 
 def _normalize_windows_path(value: str | None) -> str | None:
     text = _clean_text(value)
+    if not text:
+        return None
+    text = text.strip().strip("'\"“”‘’")
     if not text:
         return None
     if re.match(r"^[A-Za-z]:[^\\/]", text):
@@ -242,6 +246,65 @@ def _dispatch_writer(
 
     detail = "; ".join(errors)
     raise RuntimeError(f"Unable to start WPS Writer or Word via COM. Tried {detail}")
+
+
+def _existing_document_path(document_path: str) -> Path:
+    normalized = _normalize_windows_path(document_path)
+    if not normalized:
+        raise ValueError("WPS document path is required")
+    path = Path(normalized).expanduser().resolve(strict=False)
+    if not path.is_file():
+        raise FileNotFoundError(f"WPS document does not exist: {path}")
+    if path.suffix.lower() not in {".doc", ".docx", ".wps"}:
+        raise ValueError("WPS document must use .doc, .docx, or .wps")
+    return path
+
+
+def _document_backup_path(path: Path) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.stem}.backup-{timestamp}{path.suffix}")
+    index = 1
+    while candidate.exists():
+        candidate = path.with_name(
+            f"{path.stem}.backup-{timestamp}-{index}{path.suffix}"
+        )
+        index += 1
+    return candidate
+
+
+def read_wps_document(
+    document_path: str,
+    *,
+    dispatch_fn: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Read all text from an existing WPS Writer or Word document."""
+
+    path = _existing_document_path(document_path)
+    app, provider = _dispatch_writer(dispatch_fn)
+    _set_attr(app, "Visible", False)
+    _set_attr(app, "DisplayAlerts", 0)
+    doc = None
+    try:
+        doc = app.Documents.Open(str(path))
+        content = getattr(doc, "Content", None)
+        text = _clean_text(getattr(content, "Text", ""))
+        return {
+            "success": True,
+            "provider": provider,
+            "document_path": str(path),
+            "text": text,
+            "character_count": len(text),
+        }
+    finally:
+        if doc is not None:
+            try:
+                doc.Close(False)
+            except Exception:
+                pass
+        try:
+            app.Quit()
+        except Exception:
+            pass
 
 
 def _set_attr(obj: Any, name: str, value: Any) -> None:
@@ -610,6 +673,91 @@ def _insert_image(selection: Any, image_path: str | None) -> str | None:
         _call(selection, "TypeParagraph")
         return str(path)
     raise RuntimeError("WPS Writer selection does not support InlineShapes.AddPicture")
+
+
+def rewrite_wps_document(
+    document_path: str,
+    markdown_text: str,
+    *,
+    keep_open: bool = True,
+    visible: bool = True,
+    dispatch_fn: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Replace an existing document with rendered Markdown after backing it up."""
+
+    path = _existing_document_path(document_path)
+    markdown = _clean_text(markdown_text)
+    if not markdown:
+        raise ValueError("Formatted Markdown content is required")
+
+    backup_path = _document_backup_path(path)
+    shutil.copy2(path, backup_path)
+
+    markdown_title = _first_markdown_heading(markdown)
+    title_text = markdown_title or path.stem
+    markdown_body = (
+        _without_first_markdown_heading(markdown) if markdown_title else markdown
+    )
+
+    app, provider = _dispatch_writer(dispatch_fn)
+    _set_attr(app, "Visible", bool(visible))
+    _set_attr(app, "DisplayAlerts", 0)
+    doc = None
+    try:
+        doc = app.Documents.Open(str(path))
+        try:
+            doc.Activate()
+        except Exception:
+            pass
+        selection = app.Selection
+        _call(selection, "WholeStory")
+        _call(selection, "Delete")
+
+        inline_style_count = _type_document_title(
+            selection,
+            title_text,
+            "方正小标宋简体",
+            22,
+        )
+        render_result = _render_markdown(
+            selection,
+            markdown_body,
+            body_font="仿宋_GB2312",
+            body_size=16,
+            font_color=None,
+            base_italic=False,
+        )
+        _call(doc, "Save")
+
+        result = {
+            "success": True,
+            "provider": provider,
+            "document_path": str(path),
+            "backup_path": str(backup_path),
+            "title": title_text,
+            "paragraph_count": render_result["paragraph_count"] + 1,
+            "heading_count": render_result["heading_count"] + 1,
+            "inline_style_count": (
+                render_result["inline_style_count"] + inline_style_count
+            ),
+            "keep_open": keep_open,
+        }
+        if not keep_open:
+            doc.Close(False)
+            doc = None
+            app.Quit()
+        return result
+    except Exception:
+        if doc is not None:
+            try:
+                doc.Close(False)
+            except Exception:
+                pass
+        try:
+            app.Quit()
+        except Exception:
+            pass
+        raise
 
 
 def _save_docx(doc: Any, docx_path: Path) -> None:

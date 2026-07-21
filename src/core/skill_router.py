@@ -212,7 +212,7 @@ class SkillRouter:
 
         top_skill, top_score = candidates[0]
 
-        if top_skill.id == "domain/wps_writer_export" and top_score >= 0.9:
+        if top_skill.platform.lower() == "wps" and top_score >= 0.9:
             script = self.build_script(top_skill, task)
             return SkillDecision(
                 skill=top_skill,

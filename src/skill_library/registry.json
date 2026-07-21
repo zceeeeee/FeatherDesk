@@ -71,6 +71,16 @@
       "description": "登录 GitHub 账号"
     },
     {
+      "id": "wps_document_polish",
+      "name": "WPS 文章润色与格式修改",
+      "type": "domain",
+      "triggers": ["WPS润色", "wps润色", "WPS文章润色", "wps文章润色", "WPS文档润色", "润色WPS", "修改WPS文档", "WPS修改格式", "WPS文档排版"],
+      "url_patterns": [],
+      "file": "export/wps_document_polish.py",
+      "function": "run",
+      "description": "读取已有 WPS/Word 文档，按需使用 AI 润色文字或生成带格式 Markdown，备份后写回原文件"
+    },
+    {
       "id": "wps_writer_export",
       "name": "WPS 写文章并导出文件",
       "type": "domain",

@@ -91,6 +91,35 @@ skills:
   # 本地文档 / 导出
   # ──────────────────────────────────────────────
 
+  - id: "domain/wps_document_polish"
+    name: "WPS 文章润色与格式修改"
+    type: "domain"
+    platform: "wps"
+    action: "edit"
+    triggers: ["WPS润色", "wps润色", "WPS文章润色", "wps文章润色", "WPS文档润色", "润色WPS", "修改WPS文档", "WPS修改格式", "WPS文档排版"]
+    trigger_patterns:
+      - "^(?:请|帮我|麻烦)?(?:用|在)?(?:WPS|wps|金山文字|Word)(?:中|里)?(?:润色|优化|修改|编辑|排版|格式化)(?:一下)?$"
+      - "^(?:请|帮我|麻烦)?(?:用|在)?(?:WPS|wps|金山文字|Word)(?:中|里)?(?:润色|优化|修改|编辑|排版|格式化)(?:一下|这篇|这个)?(?:文章|文档|文件)?(?:[：:\\s]|[\"“]).*(?:\\.docx?|\\.wps)[\"”]?$"
+      - "^(?!.*(?:新建|创建|生成文档|写文章))(?:请|帮我|麻烦)?(?:用|在)?(?:WPS|wps|金山文字|Word)?(?:中|里)?(?:润色|优化|修改|编辑|排版|格式化).*(?:文章|文档|文件).*$"
+      - "^(?:请|帮我|麻烦)?.*(?:文章|文档|文件).*(?:润色|优化文字|修改格式|重新排版).*(?:WPS|wps|金山文字|Word).*$"
+      - "^(?:WPS|wps)(?:文章|文档)(?:润色|优化|修改格式|排版).*$"
+    url_patterns: []
+    description: "读取用户指定的已有本地 WPS/Word 文档，询问是否用 AI 润色文字及是否按用户要求修改格式，自动备份后将 Markdown 格式结果写回原文件"
+    version: "1.0.0"
+    examples:
+      - 'WPS文章润色 "D:\\docs\\报告.docx"'
+      - '帮我润色WPS文档 D:\\docs\\总结.docx'
+      - '修改这个WPS文档的格式：D:\\docs\\通知.docx'
+    params:
+      document_path:
+        type: string
+        required: true
+        confirm: true
+        description: "已有 WPS/Word 文档的完整路径"
+        extract_patterns:
+          - '(?:文档路径|文件路径|地址|路径|document_path)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:[\\/][^"”\n]+?\.(?:docx?|wps))'
+          - '["“]?([A-Za-z]:[\\/][^"”\n]+?\.(?:docx?|wps))["”]?'
+
   - id: "domain/wps_writer_export"
     name: "WPS 写文章并导出文件"
     type: "domain"
@@ -1102,6 +1131,10 @@ skills:
 # ──────────────────────────────────────────────
 
 sources:
+  - id: "domain/wps_document_polish"
+    file: "export/wps_document_polish.py"
+    entry: "run"
+
   - id: "domain/zhihu_search"
     file: "zhihu/zhihu_search.py"
     entry: "run"
