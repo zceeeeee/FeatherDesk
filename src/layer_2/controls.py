@@ -771,6 +771,18 @@ def wechat_follow_official_account(
     )
 
 
+def taobao_collect_products(keyword: str, max_items: int = 20) -> dict:
+    """Extract Taobao products and build the structured desktop result."""
+    from src.layer_3.taobao_results import (
+        build_taobao_search_result,
+        extract_taobao_products,
+    )
+
+    page = get_browser_manager().get_page()
+    products = extract_taobao_products(page, max_items=max_items)
+    return build_taobao_search_result(keyword, products)
+
+
 def wechat_send_official_account_message(
     account_name: str,
     message: str,
@@ -853,6 +865,7 @@ def get_controls_exports() -> Dict[str, Any]:
         "press_key": press_key,
         "upload_file": upload_file,
         "wps_writer_export": wps_writer_export,
+        "taobao_collect_products": taobao_collect_products,
         "wechat_follow_official_account": wechat_follow_official_account,
         "wechat_send_official_account_message": wechat_send_official_account_message,
         "wechat_send_contact_message": wechat_send_contact_message,

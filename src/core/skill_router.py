@@ -1091,7 +1091,8 @@ class SkillRouter:
             f"{pre_auth}"
             f"{chr(10).join(param_lines)}\n\n"
             f"{auth_wait}"
-            f"# 自动调用\nrun({args_str})"
+            f"# 自动调用\n"
+            f"{('__result__ = ' if skill.id == 'domain/taobao_search' else '')}run({args_str})"
         )
 
     @staticmethod

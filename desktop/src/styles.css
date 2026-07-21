@@ -278,6 +278,22 @@ button { color: inherit; }
 .message-details { max-width: 100%; max-height: 180px; margin: 5px 0 0; padding: 8px; overflow: auto; color: #dce8e2; background: #20292d; border-radius: 6px; font: 11px/16px Consolas, monospace; white-space: pre-wrap; }
 .message-actions { display: flex; gap: 3px; margin-top: 4px; }
 
+.taobao-result { display: grid; min-width: 0; gap: 8px; margin-top: 8px; }
+.taobao-result-heading, .taobao-statistics { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.taobao-result-heading span, .taobao-statistics span, .taobao-no-price { color: #6b7880; font-size: 11px; }
+.taobao-products { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.taobao-product { min-width: 0; overflow: hidden; border: 1px solid #d7e0e3; border-radius: 6px; background: #ffffff; }
+.taobao-product > img, .taobao-product-placeholder { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: #eef3f3; }
+.taobao-product-placeholder { display: grid; place-items: center; color: #839097; font-size: 11px; }
+.taobao-product-info { display: grid; min-width: 0; gap: 3px; padding: 6px; }
+.taobao-product-info a, .taobao-product-info strong { overflow: hidden; color: #304c5b; font-size: 11px; line-height: 15px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.taobao-product-info span { overflow: hidden; color: #7a858b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.taobao-product-info b { color: #d34d3e; font-size: 12px; }
+.taobao-statistics { padding-top: 2px; font-size: 11px; }
+.taobao-histogram { display: grid; gap: 4px; }
+.taobao-histogram img { display: block; width: min(100%, 520px); height: auto; border: 1px solid #d7e0e3; border-radius: 5px; }
+@media (max-width: 420px) { .taobao-products { grid-template-columns: 1fr; } .taobao-product { display: grid; grid-template-columns: 78px minmax(0, 1fr); } .taobao-product > img, .taobao-product-placeholder { width: 78px; height: 78px; } }
+
 .confirmation-card { margin: 10px 0; padding: 12px; border: 2px solid var(--theme-peach); border-radius: 8px; background: var(--theme-cream); }
 .confirmation-heading { display: flex; gap: 8px; color: #795d00; }
 .confirmation-heading > div { display: flex; flex-direction: column; }

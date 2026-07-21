@@ -874,16 +874,17 @@ skills:
     type: "domain"
     platform: "taobao"
     action: "search"
-    triggers: ["淘宝", "taobao", "搜索", "问答"]
+    triggers: ["淘宝", "taobao", "商品", "价格", "店铺", "搜索", "问答"]
     trigger_patterns:
       - "(?:在|用|打开)?\\s*(?:淘宝|taobao)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
       - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:淘宝|taobao)(?:上)?$"
     url_patterns: ["taobao.com"]
-    description: "在淘宝搜索"
-    version: "1.0.0"
+    description: "搜索淘宝商品并提取前三个商品的图片、店铺、价格统计和频数直方图"
+    version: "2.0.0"
     examples:
       - "在淘宝搜索蓝牙耳机"
       - "淘宝上找一下手机壳"
+      - "淘宝搜索耳机并给出价格统计"
     params:
       keyword:
         type: keyword

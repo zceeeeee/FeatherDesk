@@ -1,13 +1,13 @@
-""""淘宝 搜索适配器"""
+"""Taobao product search adapter."""
+
+
 def run(keyword: str):
-    """在淘宝搜索关键词。
-
-    Args:
-        keyword: 搜索关键词。
-
-    流程:
-        1. 构造b站搜索结果页 URL
-        2. 直接导航到结果页
-    """
-    goto(f"https://s.taobao.com/search?q={keyword}")
-    log(f"淘宝搜索完成: {keyword}")
+    """Search Taobao and return the first three products with price data."""
+    keyword = str(keyword or "").strip()
+    if not keyword or keyword == "-1":
+        raise ValueError("淘宝搜索需要商品关键词")
+    goto(f"https://s.taobao.com/search?q={url_quote(keyword)}")
+    wait(3)
+    result = taobao_collect_products(keyword, max_items=20)
+    log(f"淘宝商品搜索完成: {keyword}，找到 {len(result.get('products', []))} 个结果")
+    return result

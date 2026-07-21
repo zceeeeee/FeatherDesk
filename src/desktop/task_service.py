@@ -329,7 +329,7 @@ class DesktopTaskService:
                 message_type="result",
                 content=summary,
                 task_id=control.task_id,
-                metadata={"final_url": result.final_url},
+                metadata={"final_url": result.final_url, **result.artifacts},
             )
             self.database.update_task(control.task_id, "success")
             self.events.publish(

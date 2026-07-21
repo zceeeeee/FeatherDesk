@@ -151,6 +151,7 @@ class AgentTaskResult:
     error: str = ""
     sub_tasks: list[str] = field(default_factory=list)
     sub_results: list["AgentTaskResult"] = field(default_factory=list)
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +196,7 @@ class AgentLoop:
         self._llm_parser: LLMIntentParser | None = None
         self._task_splitter: TaskSplitter | None = None
         self._explore_agent: ExploreAgent | None = None
+        self._task_artifacts: dict[str, Any] = {}
 
     def _raise_if_cancelled(self) -> None:
         """检查取消信号，若已取消则抛出 TaskCancelledError。"""
@@ -266,6 +268,7 @@ class AgentLoop:
 
             combined.sub_results.extend(result.sub_results)
             combined.steps.extend(result.steps)
+            combined.artifacts.update(result.artifacts)
             task_idx += len(group.tasks)
 
             if not result.success:
@@ -330,6 +333,7 @@ class AgentLoop:
             sub_result = self._run_single(task)
             combined.sub_results.append(sub_result)
             combined.steps.extend(sub_result.steps)
+            combined.artifacts.update(sub_result.artifacts)
 
             if not sub_result.success:
                 combined.success = False
@@ -376,6 +380,7 @@ class AgentLoop:
             sub_result = self._run_single(task)
             combined.sub_results.append(sub_result)
             combined.steps.extend(sub_result.steps)
+            combined.artifacts.update(sub_result.artifacts)
 
             if not sub_result.success:
                 combined.success = False
@@ -392,6 +397,7 @@ class AgentLoop:
     def _run_single(self, task: str) -> AgentTaskResult:
         """执行单个任务（原始状态机逻辑）。"""
         result = AgentTaskResult(success=False, task=task)
+        self._task_artifacts = {}
         state = AgentState.PLAN if self._desktop_only else AgentState.OBSERVE
         step_number = 0
         pending_script: str | None = None  # PLAN 阶段生成的脚本，传递给 ACT
@@ -505,6 +511,7 @@ class AgentLoop:
 
             # 汇总结果
             result.success = state == AgentState.DONE
+            result.artifacts = dict(self._task_artifacts)
             result.final_url = bm.get_page().url if bm.is_alive() else ""
 
             if result.steps:
@@ -1978,6 +1985,9 @@ class AgentLoop:
             meta["success"] = result.success
 
         if result.success:
+            if isinstance(result.return_value, dict):
+                artifact_type = str(result.return_value.get("type") or "script_result")
+                self._task_artifacts[artifact_type] = result.return_value
             step.success = True
             step.result = "执行成功"
             if result.output:

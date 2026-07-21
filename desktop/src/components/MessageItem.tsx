@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Clipboard, RotateCcw, TriangleAlert } from "lucide-react";
 import type { ChatMessage } from "../types";
+import { ProductSearchResult } from "./ProductSearchResult";
+import { getTaobaoArtifact } from "./productSearchViewModel";
 
 interface Props {
   message: ChatMessage;
@@ -11,7 +13,10 @@ export function MessageItem({ message, onRetry }: Props) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const isProgress = message.type === "progress";
   const isError = message.type === "error";
-  const details = message.metadata || {};
+  const taobaoArtifact = getTaobaoArtifact(message);
+  const details = Object.fromEntries(
+    Object.entries(message.metadata || {}).filter(([key]) => key !== "taobao_product_search")
+  );
   const hasDetails = Object.keys(details).some((key) => details[key] !== "" && details[key] != null);
 
   return (
@@ -19,6 +24,7 @@ export function MessageItem({ message, onRetry }: Props) {
       <div className="message-content">
         {isError ? <TriangleAlert size={16} aria-hidden="true" /> : null}
         <p>{message.content}</p>
+        {taobaoArtifact ? <ProductSearchResult artifact={taobaoArtifact} /> : null}
       </div>
       {isProgress && hasDetails ? (
         <button className="detail-toggle" onClick={() => setDetailsOpen((value) => !value)}>

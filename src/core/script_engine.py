@@ -169,6 +169,7 @@ class ScriptEngine:
                 success=True,
                 output=output_buffer.getvalue(),
                 screenshots=screenshots,
+                return_value=namespace.get("__result__", namespace.get("result")),
             )
 
         except Exception as exc:
