@@ -108,7 +108,7 @@ class ScreenshotMeta(BaseModel):
 class VisualTarget(BaseModel):
     """Untrusted visual target normalized to the screenshot viewport."""
 
-    ref: str = Field(..., pattern=r"^v\d+$")
+    ref: str = Field(..., pattern=r"^[vo]\d+$")
     description: str = ""
     role: str = ""
     x: float = Field(..., ge=0.0, le=1.0)
