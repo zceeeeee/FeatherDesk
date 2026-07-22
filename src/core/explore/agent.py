@@ -457,21 +457,19 @@ class ExploreAgent:
 
         snapshot = self._last_snapshot
 
-        # ── OCR Enhancement (before vision model) ──
+        # ── OCR Enhancement (before vision model, always when enabled) ──
         if (
             self._config.ocr_enabled
             and not snapshot.ocr_enhanced
             and self._vision_router.ocr_available
         ):
-            poor_aria_for_ocr = snapshot.aria_quality < self._config.vision_quality_threshold
-            if poor_aria_for_ocr:
-                try:
-                    page = self._get_browser_manager().get_page()
-                    snapshot = self._vision_router.ocr_enhance(page, snapshot, task)
-                    self._current_snapshot = snapshot
-                    self.ensure_executor().update_snapshot(snapshot)
-                except Exception as exc:
-                    logger.warning("OCR enhancement failed: %s", exc)
+            try:
+                page = self._get_browser_manager().get_page()
+                snapshot = self._vision_router.ocr_enhance(page, snapshot, task)
+                self._current_snapshot = snapshot
+                self.ensure_executor().update_snapshot(snapshot)
+            except Exception as exc:
+                logger.warning("OCR enhancement failed: %s", exc)
 
         if self._config.vision_enabled and not snapshot.vision_enhanced:
             strong_surface = (
@@ -607,7 +605,8 @@ class ExploreAgent:
             "应该先执行导航操作（click 链接/按钮），而不是 request_deep_scan。\n"
             "18. request_deep_scan 应作为本批次唯一动作。深度扫描完成后会重新拍快照，你再基于新快照规划。\n"
             "19. 如果快照已经标记 deep_scanned=true，说明已经深度扫描过，不要再 request_deep_scan。"
-            "此时仍找不到目标元素，使用 pause_for_input 问用户。\n"
+            "此时仍找不到目标元素，优先返回 need_vision=true 让系统尝试 OCR 或视觉识别；"
+            "只有在视觉识别也不可用时才使用 pause_for_input 问用户。\n"
             "20. 当任务完成时（例如：已经找到并操作了目标元素，或者已经获取到所需信息），"
             "优先在下一次快照规划时返回 task_complete=true。"
             "如果本批次无需页面跳转且前面的动作成功后即可确定完成，也可以使用 complete 动作结束任务。"
@@ -717,6 +716,19 @@ class ExploreAgent:
             return None
 
         if batch.need_vision and not snapshot.vision_enhanced:
+            # Try OCR first (lightweight, no API cost)
+            if self._config.ocr_enabled and not snapshot.ocr_enhanced and self._vision_router.ocr_available:
+                try:
+                    page = self._get_browser_manager().get_page()
+                    snapshot = self._vision_router.ocr_enhance(page, snapshot, task)
+                    self._current_snapshot = snapshot
+                    self.ensure_executor().update_snapshot(snapshot)
+                    self._last_snapshot = snapshot
+                    # Re-plan with OCR targets available
+                    return self.plan_actions(task)
+                except Exception as exc:
+                    logger.warning("OCR fallback enhancement failed: %s", exc)
+            # Deep scan if not yet done and no strong surface
             strong_surface = (
                 self._vision_router.available
                 and self._vision_router.should_skip_deep_scan(snapshot)
@@ -732,18 +744,6 @@ class ExploreAgent:
                         )
                     ]
                 )
-            # Try OCR first if available and not yet applied
-            if self._config.ocr_enabled and not snapshot.ocr_enhanced and self._vision_router.ocr_available:
-                try:
-                    page = self._get_browser_manager().get_page()
-                    snapshot = self._vision_router.ocr_enhance(page, snapshot, task)
-                    self._current_snapshot = snapshot
-                    self.ensure_executor().update_snapshot(snapshot)
-                    self._last_snapshot = snapshot
-                    # Re-plan with OCR targets available
-                    return self.plan_actions(task)
-                except Exception as exc:
-                    logger.warning("OCR fallback enhancement failed: %s", exc)
             if self._vision_router.available:
                 try:
                     page = self._get_browser_manager().get_page()
@@ -761,7 +761,7 @@ class ExploreAgent:
                     Action(
                         action=ActionType.PAUSE_FOR_INPUT,
                         value=(
-                            "当前页面缺少可靠的语义信息，视觉识别也不可用。"
+                            "OCR 和深度扫描均未能找到目标元素，视觉模型也未配置。"
                             "请手动完成当前步骤后继续。"
                         ),
                         intent=batch.vision_reason,

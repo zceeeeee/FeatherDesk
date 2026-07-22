@@ -201,8 +201,12 @@ class VisionRouter:
             return False
         try:
             from src.core.ocr import get_ocr_module
-            return get_ocr_module(language=self._config.ocr_language) is not None
-        except Exception:
+            module = get_ocr_module(language=self._config.ocr_language)
+            if module is None:
+                logger.debug("OCR module returned None (init failed or unsupported platform)")
+            return module is not None
+        except Exception as exc:
+            logger.debug("OCR availability check failed: %s", exc)
             return False
 
     def ocr_enhance(
