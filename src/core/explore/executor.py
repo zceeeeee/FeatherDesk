@@ -601,11 +601,11 @@ class ExploreExecutor:
         self._page.mouse.move(x, y)
 
     def _normalize_visual_actions(self, batch: ActionBatch) -> ActionBatch:
-        """Convert visual refs to guarded viewport coordinate actions."""
+        """Convert visual / OCR refs to guarded viewport coordinate actions."""
         visual_actions = [
             action
             for action in batch.actions
-            if isinstance(action.ref, str) and action.ref.startswith("v")
+            if isinstance(action.ref, str) and (action.ref.startswith("v") or action.ref.startswith("o"))
         ]
         if not visual_actions:
             return batch
@@ -618,12 +618,16 @@ class ExploreExecutor:
         target_map = {
             target.ref: target for target in self._current_snapshot.visual_targets
         }
+        # Merge OCR targets (o-prefix) into the same lookup
+        for target in self._current_snapshot.ocr_targets:
+            if target.ref not in target_map:
+                target_map[target.ref] = target
         min_confidence = float(
             getattr(self._config, "vision_min_confidence", 0.65)
         )
         normalized: list[Action] = []
         for action in batch.actions:
-            if not (isinstance(action.ref, str) and action.ref.startswith("v")):
+            if not (isinstance(action.ref, str) and (action.ref.startswith("v") or action.ref.startswith("o"))):
                 normalized.append(action)
                 continue
             target = target_map.get(action.ref)
@@ -639,11 +643,11 @@ class ExploreExecutor:
                 and self._is_sensitive_visual_target(target.description)
             ):
                 raise ElementNotInteractableError(
-                    action.ref, "敏感操作不能仅依据视觉坐标自动执行"
+                    action.ref, "敏感操作不能仅依据视觉/OCR坐标自动执行"
                 )
             if action.action not in {ActionType.CLICK, ActionType.HOVER}:
                 raise ExploreError(
-                    f"视觉目标不允许执行敏感操作 {action.action}",
+                    f"视觉/OCR目标不允许执行敏感操作 {action.action}",
                     ErrorCode.INVALID_FORMAT,
                     action.ref,
                 )

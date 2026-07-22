@@ -149,6 +149,9 @@ class ExploreAgent:
             vision_sensitive_action_policy=str(
                 cfg.get("EXPLORE_VISION_SENSITIVE_ACTION_POLICY", "block")
             ),
+            ocr_enabled=str(cfg.get("EXPLORE_OCR_ENABLED", "true")).lower()
+            in {"1", "true", "yes", "on"},
+            ocr_language=str(cfg.get("EXPLORE_OCR_LANGUAGE", "zh-CN")),
         )
 
     @property
@@ -406,7 +409,7 @@ class ExploreAgent:
         if self._last_snapshot_url is not None and snapshot.url != self._last_snapshot_url:
             self._navigation_epoch += 1
         self._last_snapshot_url = snapshot.url
-        if self._config.vision_enabled:
+        if self._config.vision_enabled or self._config.ocr_enabled:
             snapshot.surface_stats = self._vision_router.inspect_surface(page)
             snapshot.aria_quality = self._vision_router.aria_quality(snapshot)
         # 如果上一步刚执行过 deep_scan，标记本次快照为已深度扫描
@@ -453,6 +456,23 @@ class ExploreAgent:
             return None
 
         snapshot = self._last_snapshot
+
+        # ── OCR Enhancement (before vision model) ──
+        if (
+            self._config.ocr_enabled
+            and not snapshot.ocr_enhanced
+            and self._vision_router.ocr_available
+        ):
+            poor_aria_for_ocr = snapshot.aria_quality < self._config.vision_quality_threshold
+            if poor_aria_for_ocr:
+                try:
+                    page = self._get_browser_manager().get_page()
+                    snapshot = self._vision_router.ocr_enhance(page, snapshot, task)
+                    self._current_snapshot = snapshot
+                    self.ensure_executor().update_snapshot(snapshot)
+                except Exception as exc:
+                    logger.warning("OCR enhancement failed: %s", exc)
+
         if self._config.vision_enabled and not snapshot.vision_enhanced:
             strong_surface = (
                 self._vision_router.available
@@ -567,7 +587,8 @@ class ExploreAgent:
             "4. keyboard 的 value 是按键名（Enter, Escape, Tab, Control+a 等）。\n"
             "5. drag 的 ref 是源元素，value 是目标元素的 ref。\n"
             "6. click_at 需要 x, y 视口坐标（用于 canvas 等无 ref 元素）。\n"
-            "6a. 视觉目标使用 v 开头的 ref。只允许 click 或 hover；不要对视觉目标执行 fill、上传或其他敏感动作。\n"
+            "6a. 视觉目标使用 v 开头的 ref，OCR 文字目标使用 o 开头的 ref。"
+            "只允许 click 或 hover；不要对视觉/OCR 目标执行 fill、上传或其他敏感动作。\n"
             "7. 会导致页面跳转的最后一步请加 condition=load 或 networkidle。\n"
             "8. 每个使用 ref 的动作都填写 snapshot_v 为当前快照版本。\n"
             "9. 不要编造快照里不存在的 ref。\n"
@@ -711,6 +732,18 @@ class ExploreAgent:
                         )
                     ]
                 )
+            # Try OCR first if available and not yet applied
+            if self._config.ocr_enabled and not snapshot.ocr_enhanced and self._vision_router.ocr_available:
+                try:
+                    page = self._get_browser_manager().get_page()
+                    snapshot = self._vision_router.ocr_enhance(page, snapshot, task)
+                    self._current_snapshot = snapshot
+                    self.ensure_executor().update_snapshot(snapshot)
+                    self._last_snapshot = snapshot
+                    # Re-plan with OCR targets available
+                    return self.plan_actions(task)
+                except Exception as exc:
+                    logger.warning("OCR fallback enhancement failed: %s", exc)
             if self._vision_router.available:
                 try:
                     page = self._get_browser_manager().get_page()

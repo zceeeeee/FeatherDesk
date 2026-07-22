@@ -425,8 +425,8 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     BROWSER_HEADLESS: stored.browserHeadless || "false",
     DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",
     USE_CLOAKBROWSER: stored.useCloakBrowser || "true",
-    EXPLORE_VISION_ENABLED: stored.visionEnabled || "false",
-    LOG_LEVEL: stored.logLevel || "INFO"
+    EXPLORE_OCR_ENABLED: stored.exploreOcrEnabled || "true",
+    EXPLORE_VISION_ENABLED: stored.exploreVisionEnabled || "false"
   });
   if (provider === "anthropic") {
     env.ANTHROPIC_API_KEY = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -614,8 +614,8 @@ function registerIpc(): void {
       browserHeadless: settings.browserHeadless === "true",
       maxSteps,
       useCloakBrowser: settings.useCloakBrowser !== "false",
-      visionEnabled: settings.visionEnabled === "true",
-      logLevel,
+      exploreOcrEnabled: settings.exploreOcrEnabled !== "false",
+      exploreVisionEnabled: settings.exploreVisionEnabled === "true",
       apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : ""
     };
   });
@@ -646,10 +646,8 @@ function registerIpc(): void {
       Math.min(100, Math.max(5, Math.round(Number(incoming.maxSteps ?? 20)) || 20))
     );
     existing.useCloakBrowser = String(incoming.useCloakBrowser !== false);
-    existing.visionEnabled = String(Boolean(incoming.visionEnabled));
-    const validLogLevels = ["DEBUG", "INFO", "WARNING", "ERROR"];
-    const incomingLogLevel = String(incoming.logLevel || "INFO").toUpperCase();
-    existing.logLevel = validLogLevels.includes(incomingLogLevel) ? incomingLogLevel : "INFO";
+    existing.exploreOcrEnabled = String(incoming.exploreOcrEnabled !== false);
+    existing.exploreVisionEnabled = String(incoming.exploreVisionEnabled === true);
     writeJson(userFile("settings.json"), existing);
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };

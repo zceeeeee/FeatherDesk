@@ -124,6 +124,8 @@ export interface DesktopSettings {
   browserHeadless: boolean;
   maxSteps: number;
   useCloakBrowser: boolean;
+  exploreOcrEnabled: boolean;
+  exploreVisionEnabled: boolean;
   visionEnabled: boolean;
   logLevel: "DEBUG" | "INFO" | "WARNING" | "ERROR";
 }
