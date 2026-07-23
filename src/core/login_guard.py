@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 
 class GenericLoginGuard:
-    """Pause execution when a login modal appears and resume after auth cookies change."""
+    """Pause execution when a login modal appears and wait for authentication."""
 
     def __init__(
         self,
@@ -26,11 +26,14 @@ class GenericLoginGuard:
         self._panel_manager_getter = panel_manager_getter
         self._enabled = enabled
         self._waiting = False
+        self._taobao_login_confirmed = False
         self._last_check_time: float = 0.0
         self._check_interval: float = 0.5  # 500ms interval
 
     def maybe_wait(self, action_name: str) -> bool:
         if not self._enabled or self._waiting:
+            return False
+        if self._taobao_login_confirmed and self._domain() == "taobao":
             return False
         # Skip non-interactive operations
         if action_name in {
@@ -102,6 +105,8 @@ class GenericLoginGuard:
         host = self._hostname()
         if host.endswith("mail.google.com"):
             return "gmail"
+        if host == "taobao.com" or host.endswith(".taobao.com"):
+            return "taobao"
         labels = [part for part in host.split(".") if part and part != "www"]
         return labels[0] if labels else "default"
 
@@ -182,6 +187,14 @@ class GenericLoginGuard:
                 and cookies.get("x-rednote-datactry")
                 and cookies.get("x-rednote-holderctry")
             )
+        if domain == "taobao":
+            has_identity = bool(
+                cookies.get("tracknick")
+                or cookies.get("_nk_")
+                or cookies.get("lgc")
+            )
+            has_session = bool(cookies.get("cookie2") or cookies.get("unb"))
+            return has_identity and has_session
 
         auth_words = (
             "auth",
@@ -203,10 +216,54 @@ class GenericLoginGuard:
                     return True
         return False
 
+    def _detect_taobao_login_prompt(self) -> dict[str, Any] | None:
+        try:
+            page = self._page()
+            url = str(getattr(page, "url", "") or "")
+        except Exception:
+            return None
+        host = (urlparse(url).hostname or "").lower()
+        if not (host == "taobao.com" or host.endswith(".taobao.com")):
+            return None
+
+        if host.startswith("login.") or host.startswith("passport."):
+            return {
+                "success": True,
+                "login_required": True,
+                "reason": "taobao_login_page",
+                "url": url,
+            }
+
+        selector = (
+            "iframe[src*='login.taobao.com'],"
+            "iframe[src*='passport.taobao.com'],"
+            "iframe[src*='login.m.taobao.com']"
+        )
+        try:
+            frames = page.locator(selector)
+            for index in range(min(int(frames.count()), 20)):
+                frame = frames.nth(index)
+                if not frame.is_visible():
+                    continue
+                return {
+                    "success": True,
+                    "login_required": True,
+                    "reason": "taobao_login_iframe",
+                    "url": url,
+                    "frame_url": str(frame.get_attribute("src") or ""),
+                }
+        except Exception:
+            return None
+        return None
+
     def _detect_login_prompt(self) -> dict:
+        taobao_prompt = self._detect_taobao_login_prompt()
+        if taobao_prompt is not None:
+            return taobao_prompt
+
         try:
             result = self._page().evaluate(
-                """
+                r"""
 (() => {
   /* GENERIC_LOGIN_PROMPT_DETECTOR */
   const LOGIN_KEYWORDS = [
@@ -316,14 +373,92 @@ class GenericLoginGuard:
             return True
         return False
 
+    def _save_auth(self, domain: str) -> None:
+        try:
+            if self._browser_manager is not None:
+                self._browser_manager.save_auth(domain)
+        except Exception:
+            pass
+
+    def _wait_for_taobao_login_state(self, page: Any) -> bool:
+        if self._storage_state_logged_in("taobao"):
+            return True
+
+        raw_timeout = os.environ.get(
+            "TAOBAO_LOGIN_CONFIRM_WAIT_SECONDS",
+            "10",
+        )
+        try:
+            timeout_seconds = max(0.0, float(raw_timeout or "10"))
+        except (TypeError, ValueError):
+            timeout_seconds = 10.0
+        attempts = max(1, int(timeout_seconds * 2 + 0.999))
+
+        for _ in range(attempts):
+            if self._is_page_closed(page):
+                raise RuntimeError("Page closed while waiting for manual login")
+            try:
+                page.wait_for_timeout(500)
+            except Exception as exc:
+                message = str(exc)
+                if "TargetClosed" in message or "closed" in message.lower():
+                    raise RuntimeError(
+                        "Page closed while waiting for manual login"
+                    ) from exc
+                raise
+            if self._storage_state_logged_in("taobao"):
+                return True
+        return False
+
+    def _wait_for_taobao_confirmation(self, page: Any, action_name: str) -> None:
+        if self._panel_manager_getter is None:
+            raise RuntimeError(
+                "Taobao login requires confirmation in the active desktop conversation"
+            )
+
+        try:
+            panel = self._panel_manager_getter()
+        except Exception as exc:
+            raise RuntimeError(
+                "Taobao login requires confirmation in the active desktop conversation"
+            ) from exc
+
+        self._log(f"Waiting for Taobao login confirmation after {action_name}")
+        title = "确认已登录完成"
+        question = "请先在淘宝登录窗口中完成登录，完成后点击下方按钮。[已经完成]"
+        while True:
+            if self._is_page_closed(page):
+                raise RuntimeError("Page closed while waiting for manual login")
+
+            set_title = getattr(panel, "set_title", None)
+            if callable(set_title):
+                set_title(page, title)
+            try:
+                answer = str(panel.prompt(page, question) or "").strip()
+            finally:
+                if callable(set_title):
+                    set_title(page, "")
+
+            if answer != "已经完成":
+                raise RuntimeError(
+                    "Taobao login confirmation was not completed "
+                    "in the desktop conversation"
+                )
+            if self._wait_for_taobao_login_state(page):
+                self._taobao_login_confirmed = True
+                self._save_auth("taobao")
+                self._log("taobao login confirmed by user; continuing task")
+                return
+
+            self._log(
+                "未检测到有效的淘宝登录状态，请完成登录后再次点击“已经完成”"
+            )
+
     def _wait_for_completion(self, action_name: str) -> None:
         self._waiting = True
         try:
             page = self._page()
             domain = self._domain()
-            initial_fingerprint = self._fingerprint()
-            timeout_seconds = int(os.environ.get("AUTO_LOGIN_WAIT_SECONDS", "300") or "300")
-            deadline = time.monotonic() + max(1, timeout_seconds)
             message = (
                 f"Detected login popup on {domain} after {action_name}. "
                 "Please complete login in the browser."
@@ -337,6 +472,13 @@ class GenericLoginGuard:
             except Exception:
                 pass
 
+            if domain == "taobao":
+                self._wait_for_taobao_confirmation(page, action_name)
+                return
+
+            initial_fingerprint = self._fingerprint()
+            timeout_seconds = int(os.environ.get("AUTO_LOGIN_WAIT_SECONDS", "300") or "300")
+            deadline = time.monotonic() + max(1, timeout_seconds)
             known_domains = {
                 "bilibili",
                 "douyin",
@@ -353,14 +495,11 @@ class GenericLoginGuard:
                 known_logged_in = (
                     domain in known_domains and self._storage_state_logged_in(domain)
                 )
-                if prompt_gone and (
+                login_confirmed = (
                     known_logged_in or current_fingerprint != initial_fingerprint
-                ):
-                    try:
-                        if self._browser_manager is not None:
-                            self._browser_manager.save_auth(domain)
-                    except Exception:
-                        pass
+                )
+                if prompt_gone and login_confirmed:
+                    self._save_auth(domain)
                     self._log(f"{domain} login detected; continuing task")
                     return
 

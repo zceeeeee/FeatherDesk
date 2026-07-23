@@ -11,8 +11,8 @@ triggers:
 url_patterns:
   - "*.taobao.com"
 domain: taobao
-description: "搜索淘宝商品，提取前三个商品的图片、店铺和价格，并生成价格统计与频数直方图"
-version: "2.0.0"
+description: "搜索淘宝商品，展示前三张图片、前五个商品明细，并生成价格统计与频数直方图"
+version: "2.1.0"
 examples:
   - "淘宝搜索蓝牙耳机"
   - "在淘宝上找手机壳，给出价格统计"
@@ -24,5 +24,9 @@ parameters:
 steps:
   - action: goto
     args:
+      url: "https://login.taobao.com/member/login.jhtml"
+    comment: "先打开淘宝登录页，确认登录完成后才能继续"
+  - action: goto
+    args:
       url: "https://s.taobao.com/search?q={{keyword}}"
-    comment: "打开淘宝商品搜索结果页"
+    comment: "确认登录成功后打开淘宝商品搜索结果页"

@@ -1,4 +1,7 @@
-import type { TaobaoSearchArtifact } from "./productSearchViewModel";
+import {
+  getTaobaoTableRows,
+  type TaobaoSearchArtifact
+} from "./productSearchViewModel";
 
 function price(value: number): string {
   return `¥${value.toFixed(2)}`;
@@ -6,6 +9,7 @@ function price(value: number): string {
 
 export function ProductSearchResult({ artifact }: { artifact: TaobaoSearchArtifact }) {
   const statistics = artifact.statistics;
+  const tableRows = getTaobaoTableRows(artifact);
   return (
     <section className="taobao-result" aria-label="淘宝商品搜索结果">
       <div className="taobao-result-heading">
@@ -13,7 +17,7 @@ export function ProductSearchResult({ artifact }: { artifact: TaobaoSearchArtifa
         <span>{artifact.products.length} 个结果</span>
       </div>
       <div className="taobao-products">
-        {artifact.products.map((product, index) => (
+        {artifact.products.slice(0, 3).map((product, index) => (
           <article className="taobao-product" key={`${product.product_url || product.title}-${index}`}>
             {product.image_url ? (
               <img
@@ -32,6 +36,39 @@ export function ProductSearchResult({ artifact }: { artifact: TaobaoSearchArtifa
             </div>
           </article>
         ))}
+      </div>
+      <div className="taobao-table-scroll">
+        <table className="taobao-product-table">
+          <thead>
+            <tr>
+              <th>商品/型号</th>
+              <th>价格</th>
+              <th>厂商/店铺</th>
+              <th>规格参数</th>
+              <th>链接</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tableRows.map((row) => (
+              <tr key={row.key}>
+                <td data-label="商品/型号">
+                  <div className="taobao-cell-content">
+                    <strong>{row.title}</strong>
+                    <span>{row.model}</span>
+                  </div>
+                </td>
+                <td data-label="价格"><span className="taobao-table-price">{row.price}</span></td>
+                <td data-label="厂商/店铺"><span>{row.vendor}</span></td>
+                <td data-label="规格参数"><span>{row.specifications}</span></td>
+                <td data-label="链接">
+                  <span>{row.product_url ? (
+                    <a href={row.product_url} target="_blank" rel="noreferrer">打开商品</a>
+                  ) : "暂无"}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
       {statistics ? (
         <div className="taobao-statistics">

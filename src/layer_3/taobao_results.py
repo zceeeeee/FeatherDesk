@@ -64,6 +64,16 @@ TAOBAO_RESULT_SCRIPT = r"""
       '[class*="shop"]', '[class*="Shop"]', '[class*="seller"]',
       '[class*="Seller"]', '[class*="店铺"]'
     ]);
+    const manufacturer = firstText(root, [
+      '[class*="brand"]', '[class*="Brand"]', '[data-brand]'
+    ]) || clean(root.getAttribute('data-brand'));
+    const model = firstText(root, [
+      '[class*="model"]', '[class*="Model"]', '[data-model]'
+    ]) || clean(root.getAttribute('data-model'));
+    const specifications = firstText(root, [
+      '[class*="spec"]', '[class*="Spec"]', '[class*="sku"]',
+      '[class*="Sku"]', '[class*="parameter"]', '[class*="Parameter"]'
+    ]);
     const price = firstText(root, [
       '[class*="price"]', '[class*="Price"]', '[class*="money"]',
       '[class*="Money"]'
@@ -75,6 +85,9 @@ TAOBAO_RESULT_SCRIPT = r"""
     products.push({
       title: clean(title),
       shop: clean(shop),
+      manufacturer: clean(manufacturer),
+      model: clean(model),
+      specifications: clean(specifications),
       price: clean(price),
       image_url: String(imageUrl || ""),
       product_url: productUrl
@@ -87,12 +100,66 @@ TAOBAO_RESULT_SCRIPT = r"""
 """
 
 
+TAOBAO_DETAIL_SCRIPT = r"""
+() => {
+  /* TAOBAO_DETAIL_EXTRACTOR */
+  const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const visible = (node) => {
+    if (!node) return false;
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const firstText = (selectors) => {
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      if (node && visible(node)) {
+        const value = clean(node.innerText || node.textContent);
+        if (value) return value;
+      }
+    }
+    return "";
+  };
+  const lines = String(document.body && document.body.innerText || "")
+    .split(/\r?\n/).map(clean).filter(Boolean);
+  const labeled = (labels) => {
+    for (const line of lines) {
+      for (const label of labels) {
+        if (!line.startsWith(label)) continue;
+        const value = clean(line.slice(label.length).replace(/^\s*[:：]\s*/, ""));
+        if (value && value.length <= 160) return value;
+      }
+    }
+    return "";
+  };
+  const specificationNodes = Array.from(document.querySelectorAll(
+    '[class*="parameter" i], [class*="attribute" i], [class*="property" i], ' +
+    '[class*="specification" i], [class*="productParam" i], [class*="props" i]'
+  )).filter(visible).map((node) => clean(node.innerText || node.textContent))
+    .filter((value) => value.length >= 2 && value.length <= 240);
+  return {
+    title: firstText(['h1', '[class*="title" i]', '[data-title]']),
+    manufacturer: firstText(['[class*="brand" i]', '[data-brand]']) ||
+      labeled(['品牌', '生产厂家', '制造商']),
+    model: firstText(['[class*="model" i]', '[data-model]']) ||
+      labeled(['型号', '货号']),
+    specifications: specificationNodes.slice(0, 3).join('；').slice(0, 240)
+  };
+}
+"""
+
+
 _WHITESPACE_RE = re.compile(r"\s+")
 _PRICE_RE = re.compile(r"(?:¥|￥|RMB|人民币)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
 
 
 def _clean(value: Any) -> str:
     return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
+
+
+def _bounded(value: Any, limit: int = 240) -> str:
+    return _clean(value)[:limit]
 
 
 def _as_url(value: Any, *, base_url: str = "") -> str:
@@ -128,7 +195,14 @@ def _normalize_product(raw: Any, *, base_url: str = "") -> dict[str, Any] | None
         numeric_price = display_price
     return {
         "title": title,
-        "shop": _clean(raw.get("shop") or raw.get("shop_name") or raw.get("seller")),
+        "shop": _bounded(
+            raw.get("shop") or raw.get("shop_name") or raw.get("seller")
+        ),
+        "manufacturer": _bounded(raw.get("manufacturer") or raw.get("brand")),
+        "model": _bounded(raw.get("model")),
+        "specifications": _bounded(
+            raw.get("specifications") or raw.get("specs") or raw.get("parameters")
+        ),
         "price": _parse_price(numeric_price),
         "price_text": _clean(display_price),
         "image_url": _as_url(
@@ -160,6 +234,67 @@ def extract_taobao_products(page: Any, *, max_items: int = 20) -> list[dict[str,
         if normalized:
             products.append(normalized)
     return products
+
+
+def _merge_product_detail(product: dict[str, Any], raw_detail: Any) -> None:
+    if not isinstance(raw_detail, dict):
+        return
+    aliases = {
+        "title": ("title", "name"),
+        "manufacturer": ("manufacturer", "brand"),
+        "model": ("model",),
+        "specifications": ("specifications", "specs", "parameters"),
+    }
+    for field, candidates in aliases.items():
+        if _clean(product.get(field)):
+            continue
+        value = next((_bounded(raw_detail.get(key)) for key in candidates if raw_detail.get(key)), "")
+        if value:
+            product[field] = value
+
+
+def enrich_taobao_products(
+    page: Any,
+    products: list[dict[str, Any]],
+    *,
+    max_products: int = 5,
+) -> list[dict[str, Any]]:
+    """Fill missing model/specification fields from bounded product detail visits."""
+    if page is None or not hasattr(page, "goto") or not hasattr(page, "evaluate"):
+        return [dict(item) for item in products]
+    enriched = [dict(item) for item in products]
+    original_url = str(getattr(page, "url", "") or "")
+    try:
+        for product in enriched[: max(1, int(max_products))]:
+            if _clean(product.get("model")) and _clean(product.get("specifications")):
+                continue
+            product_url = _as_url(product.get("product_url"), base_url=original_url)
+            if not product_url:
+                continue
+            try:
+                page.goto(
+                    product_url,
+                    wait_until="domcontentloaded",
+                    timeout=15000,
+                )
+                wait_for_timeout = getattr(page, "wait_for_timeout", None)
+                if callable(wait_for_timeout):
+                    wait_for_timeout(700)
+                _merge_product_detail(product, page.evaluate(TAOBAO_DETAIL_SCRIPT))
+            except Exception:
+                continue
+    finally:
+        current_url = str(getattr(page, "url", "") or "")
+        if original_url and current_url != original_url:
+            try:
+                page.goto(
+                    original_url,
+                    wait_until="domcontentloaded",
+                    timeout=15000,
+                )
+            except Exception:
+                pass
+    return enriched
 
 
 def _histogram(values: list[float]) -> list[dict[str, Any]]:
@@ -214,7 +349,7 @@ def build_taobao_search_result(
     keyword: str,
     products: list[dict[str, Any]],
     *,
-    max_products: int = 3,
+    max_products: int = 5,
 ) -> dict[str, Any]:
     """Build the bounded artifact shown by the desktop chat."""
     normalized = [

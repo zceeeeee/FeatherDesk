@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -357,6 +357,345 @@ class TestBrowserPrimitives:
 
         with pytest.raises(RuntimeError, match="Page closed while waiting"):
             guard.maybe_wait("after_goto")
+
+    def test_taobao_login_detector_recognizes_visible_login_iframe(self):
+        class FakeLocator:
+            def count(self):
+                return 1
+
+            def nth(self, index):
+                assert index == 0
+                return self
+
+            def is_visible(self):
+                return True
+
+            def get_attribute(self, name):
+                assert name == "src"
+                return "https://login.taobao.com/member/login.jhtml?style=mini"
+
+        class FakePage:
+            url = "https://s.taobao.com/search?q=keyboard"
+
+            def locator(self, selector):
+                assert "login.taobao.com" in selector
+                return FakeLocator()
+
+            def evaluate(self, code):
+                assert "GENERIC_LOGIN_PROMPT_DETECTOR" in code
+                return {
+                    "success": True,
+                    "login_required": False,
+                    "url": self.url,
+                }
+
+        guard = GenericLoginGuard(lambda: FakePage())
+
+        assert guard._detect_login_prompt() == {
+            "success": True,
+            "login_required": True,
+            "reason": "taobao_login_iframe",
+            "url": "https://s.taobao.com/search?q=keyboard",
+            "frame_url": "https://login.taobao.com/member/login.jhtml?style=mini",
+        }
+
+    def test_taobao_login_host_uses_taobao_domain(self):
+        class FakePage:
+            url = "https://login.taobao.com/member/login.jhtml"
+
+        guard = GenericLoginGuard(lambda: FakePage())
+
+        assert guard._domain() == "taobao"
+
+    def test_taobao_login_requires_explicit_confirmation(self):
+        class FakeContext:
+            def storage_state(self):
+                return {
+                    "cookies": [
+                        {
+                            "name": "tracknick",
+                            "value": "buyer",
+                            "domain": ".taobao.com",
+                        },
+                        {
+                            "name": "cookie2",
+                            "value": "session",
+                            "domain": ".taobao.com",
+                        },
+                    ],
+                    "origins": [],
+                }
+
+        class FakePage:
+            url = "https://login.taobao.com/"
+
+            def __init__(self, context):
+                self.context = context
+                self.waits = 0
+                self.detect_calls = 0
+
+            def evaluate(self, code):
+                if "GENERIC_LOGIN_PROMPT_DETECTOR" in code:
+                    self.detect_calls += 1
+                    return {
+                        "success": True,
+                        "login_required": self.detect_calls == 1,
+                        "url": self.url,
+                    }
+                return None
+
+            def wait_for_timeout(self, _milliseconds):
+                self.waits += 1
+                raise AssertionError("Taobao login must wait for desktop confirmation")
+
+            def is_closed(self):
+                return False
+
+        class FakeBrowserManager:
+            def __init__(self):
+                self._context = FakeContext()
+                self.page = FakePage(self._context)
+                self.current_domain = "taobao"
+                self.saved_domains: list[str] = []
+
+            def get_page(self):
+                return self.page
+
+            def save_auth(self, domain=None):
+                self.saved_domains.append(domain)
+
+        browser_manager = FakeBrowserManager()
+        panel = MagicMock()
+        panel.prompt.return_value = "已经完成"
+        guard = GenericLoginGuard(
+            browser_manager.get_page,
+            browser_manager=browser_manager,
+            panel_manager_getter=lambda: panel,
+        )
+
+        assert guard.maybe_wait("before_taobao_collect_products") is True
+        panel.set_title.assert_has_calls(
+            [
+                call(browser_manager.page, "确认已登录完成"),
+                call(browser_manager.page, ""),
+            ]
+        )
+        panel.prompt.assert_called_once_with(
+            browser_manager.page,
+            "请先在淘宝登录窗口中完成登录，完成后点击下方按钮。[已经完成]",
+        )
+        assert browser_manager.page.waits == 0
+        assert browser_manager.saved_domains == ["taobao"]
+
+    def test_taobao_login_confirmation_waits_for_cookie_propagation(self, monkeypatch):
+        monkeypatch.setenv("TAOBAO_LOGIN_CONFIRM_WAIT_SECONDS", "1")
+
+        class FakeContext:
+            def __init__(self):
+                self.logged_in = False
+
+            def storage_state(self):
+                cookies = []
+                if self.logged_in:
+                    cookies = [
+                        {
+                            "name": "tracknick",
+                            "value": "buyer",
+                            "domain": ".taobao.com",
+                        },
+                        {
+                            "name": "cookie2",
+                            "value": "session",
+                            "domain": ".taobao.com",
+                        },
+                    ]
+                return {"cookies": cookies, "origins": []}
+
+        class FakePage:
+            url = "https://s.taobao.com/search?q=keyboard"
+
+            def __init__(self, context):
+                self.context = context
+                self.waits = 0
+
+            def wait_for_timeout(self, milliseconds):
+                assert milliseconds == 500
+                self.waits += 1
+                self.context.logged_in = True
+
+            def is_closed(self):
+                return False
+
+        class FakeBrowserManager:
+            def __init__(self):
+                self._context = FakeContext()
+                self.page = FakePage(self._context)
+                self.current_domain = "taobao"
+                self.saved_domains: list[str] = []
+
+            def get_page(self):
+                return self.page
+
+            def save_auth(self, domain=None):
+                self.saved_domains.append(domain)
+
+        browser_manager = FakeBrowserManager()
+        panel = MagicMock()
+        panel.prompt.side_effect = [
+            "已经完成",
+            AssertionError("confirmation card must not be recreated while cookies settle"),
+        ]
+        guard = GenericLoginGuard(
+            browser_manager.get_page,
+            browser_manager=browser_manager,
+            panel_manager_getter=lambda: panel,
+        )
+        guard._detect_login_prompt = MagicMock(
+            return_value={"login_required": True}
+        )
+
+        assert guard.maybe_wait("before_taobao_collect_products") is True
+        assert panel.prompt.call_count == 1
+        assert browser_manager.page.waits == 1
+        assert browser_manager.saved_domains == ["taobao"]
+
+    def test_taobao_login_confirmation_suppresses_duplicate_prompt(self):
+        class FakeContext:
+            def storage_state(self):
+                return {
+                    "cookies": [
+                        {
+                            "name": "tracknick",
+                            "value": "buyer",
+                            "domain": ".taobao.com",
+                        },
+                        {
+                            "name": "cookie2",
+                            "value": "session",
+                            "domain": ".taobao.com",
+                        },
+                    ],
+                    "origins": [],
+                }
+
+        class FakePage:
+            url = "https://s.taobao.com/search?q=keyboard"
+            context = FakeContext()
+
+            def is_closed(self):
+                return False
+
+        page = FakePage()
+
+        class FakeBrowserManager:
+            current_domain = "taobao"
+            _context = page.context
+
+            def get_page(self):
+                return page
+
+            def save_auth(self, domain=None):
+                assert domain == "taobao"
+
+        browser_manager = FakeBrowserManager()
+        panel = MagicMock()
+        panel.prompt.return_value = "已经完成"
+        guard = GenericLoginGuard(
+            browser_manager.get_page,
+            browser_manager=browser_manager,
+            panel_manager_getter=lambda: panel,
+        )
+        guard._detect_login_prompt = MagicMock(
+            return_value={"login_required": True}
+        )
+
+        assert guard.maybe_wait("before_taobao_collect_products") is True
+        guard._last_check_time = 0
+        assert guard.maybe_wait("after_taobao_collect_products") is False
+        assert guard._detect_login_prompt.call_count == 1
+        assert panel.prompt.call_count == 1
+
+    def test_taobao_login_confirmation_retries_until_cookies_are_valid(self):
+        class FakeContext:
+            def __init__(self):
+                self.logged_in = False
+
+            def storage_state(self):
+                cookies = []
+                if self.logged_in:
+                    cookies.extend(
+                        [
+                            {
+                                "name": "tracknick",
+                                "value": "buyer",
+                                "domain": ".taobao.com",
+                            },
+                            {
+                                "name": "cookie2",
+                                "value": "session",
+                                "domain": ".taobao.com",
+                            },
+                        ]
+                    )
+                return {"cookies": cookies, "origins": []}
+
+        class FakePage:
+            url = "https://login.taobao.com/"
+
+            def __init__(self, context):
+                self.context = context
+                self.waits = 0
+
+            def evaluate(self, code):
+                if "GENERIC_LOGIN_PROMPT_DETECTOR" in code:
+                    return {
+                        "success": True,
+                        "login_required": True,
+                        "url": self.url,
+                    }
+                return None
+
+            def wait_for_timeout(self, _milliseconds):
+                self.waits += 1
+
+            def is_closed(self):
+                return False
+
+        class FakeBrowserManager:
+            def __init__(self):
+                self._context = FakeContext()
+                self.page = FakePage(self._context)
+                self.current_domain = "taobao"
+                self.saved_domains: list[str] = []
+
+            def get_page(self):
+                return self.page
+
+            def save_auth(self, domain=None):
+                self.saved_domains.append(domain)
+
+        browser_manager = FakeBrowserManager()
+        panel = MagicMock()
+
+        def confirm_login(_page, _question):
+            if panel.prompt.call_count == 2:
+                browser_manager._context.logged_in = True
+            return "已经完成"
+
+        panel.prompt.side_effect = confirm_login
+        messages: list[str] = []
+        guard = GenericLoginGuard(
+            browser_manager.get_page,
+            browser_manager=browser_manager,
+            log_fn=messages.append,
+            panel_manager_getter=lambda: panel,
+        )
+
+        assert guard.maybe_wait("before_taobao_collect_products") is True
+        assert panel.prompt.call_count == 2
+        assert browser_manager.page.waits > 0
+        assert browser_manager.saved_domains == ["taobao"]
+        assert any("未检测到有效的淘宝登录状态" in message for message in messages)
 
     def test_declining_saved_login_replaces_the_authenticated_context(self):
         class FakeContext:

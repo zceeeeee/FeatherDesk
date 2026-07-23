@@ -170,6 +170,25 @@ def test_zhihu_mode_prompt_becomes_structured_choices() -> None:
     assert "[AI生成]" not in prompt["message"]
 
 
+def test_taobao_login_prompt_becomes_single_completion_choice() -> None:
+    prompt = parse_desktop_prompt(
+        "请先在淘宝登录窗口中完成登录，完成后点击下方按钮。[已经完成]",
+        title="确认已登录完成",
+    )
+
+    assert prompt["prompt_type"] == "choice"
+    assert prompt["title"] == "确认已登录完成"
+    assert prompt["message"] == "请先在淘宝登录窗口中完成登录，完成后点击下方按钮"
+    assert prompt["actions"] == [
+        {
+            "id": "option_0",
+            "label": "已经完成",
+            "value": "已经完成",
+            "description": "选择此项继续",
+        }
+    ]
+
+
 def test_missing_and_existing_zhihu_values_get_different_controls() -> None:
     missing = parse_desktop_prompt(
         "请确认技能「知乎发布」的参数「文章标题」。当前值：-1。"

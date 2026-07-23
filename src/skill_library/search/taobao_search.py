@@ -1,11 +1,14 @@
 """Taobao product search adapter."""
 
+LOGIN_URL = "https://login.taobao.com/member/login.jhtml"
+
 
 def run(keyword: str):
-    """Search Taobao and return the first three products with price data."""
+    """Return the first three product images and five product detail rows."""
     keyword = str(keyword or "").strip()
     if not keyword or keyword == "-1":
         raise ValueError("淘宝搜索需要商品关键词")
+    goto(LOGIN_URL)
     goto(f"https://s.taobao.com/search?q={url_quote(keyword)}")
     wait(3)
     result = taobao_collect_products(keyword, max_items=20)

@@ -801,12 +801,14 @@ def taobao_collect_products(keyword: str, max_items: int = 20) -> dict:
     """Extract Taobao products and build the structured desktop result."""
     from src.layer_3.taobao_results import (
         build_taobao_search_result,
+        enrich_taobao_products,
         extract_taobao_products,
     )
 
     page = get_browser_manager().get_page()
     products = extract_taobao_products(page, max_items=max_items)
-    return build_taobao_search_result(keyword, products)
+    products = enrich_taobao_products(page, products, max_products=5)
+    return build_taobao_search_result(keyword, products, max_products=5)
 
 
 def wechat_send_official_account_message(

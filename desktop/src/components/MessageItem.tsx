@@ -20,7 +20,7 @@ export function MessageItem({ message, onRetry }: Props) {
   const hasDetails = Object.keys(details).some((key) => details[key] !== "" && details[key] != null);
 
   return (
-    <article className={`message message-${message.type} role-${message.role}`}>
+    <article className={`message message-${message.type} role-${message.role}${taobaoArtifact ? " message-has-taobao-result" : ""}`}>
       <div className="message-content">
         {isError ? <TriangleAlert size={16} aria-hidden="true" /> : null}
         <p>{message.content}</p>

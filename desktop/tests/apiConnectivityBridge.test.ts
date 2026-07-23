@@ -13,7 +13,10 @@ const currentSettings: DesktopSettings = {
   requestTimeout: 60,
   browserHeadless: false,
   maxSteps: 20,
-  useCloakBrowser: true
+  useCloakBrowser: true,
+  exploreOcrEnabled: true,
+  exploreVisionEnabled: false,
+  logLevel: "INFO"
 };
 
 test("desktop settings test forwards unsaved form values", async () => {

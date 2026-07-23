@@ -379,6 +379,14 @@ class ScriptEngine:
                     and cookies.get("x-rednote-datactry")
                     and cookies.get("x-rednote-holderctry")
                 )
+            if domain == "taobao":
+                has_identity = bool(
+                    cookies.get("tracknick")
+                    or cookies.get("_nk_")
+                    or cookies.get("lgc")
+                )
+                has_session = bool(cookies.get("cookie2") or cookies.get("unb"))
+                return has_identity and has_session
             auth_words = (
                 "auth",
                 "login",
@@ -569,6 +577,7 @@ class ScriptEngine:
             "hover",
             "type_text",
             "press_key",
+            "taobao_collect_products",
             "upload_file",
         }
         for action_name in guarded_action_names:
