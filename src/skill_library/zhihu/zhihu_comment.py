@@ -135,15 +135,37 @@ def _prepare_comment_request(keyword: str):
         )
         return True, current, str(requirement or "").strip()
 
-    elif not current or current == "-1":
-        current = str(panel_prompt("请输入要发布的知乎评论内容：") or "").strip()
+    else:
+        fields = []
+        if current and current != "-1":
+            shown = current if len(current) <= 40 else current[:40] + "..."
+            fields = [{
+                "name": "zhihu_comment_content",
+                "label": "知乎评论内容",
+                "type": "textarea",
+                "required": True,
+                "default_value": current,
+                "default_label": f"使用识别内容：{shown}",
+            }]
+        panel_set_fields(fields)
+        try:
+            current = str(
+                panel_prompt("请输入要发布的知乎评论内容，或点击上方按钮使用 Agent 识别到的内容：") or ""
+            ).strip()
+        finally:
+            panel_set_fields([])
 
     if not current or current == "-1":
         raise RuntimeError("Missing Zhihu comment content")
     return False, current, ""
 
 
-def run(keyword: str, article_url: str = ""):
+def run(
+    keyword: str,
+    article_url: str = "",
+    use_ai=None,
+    requirement_text: str = "",
+):
     """Open Zhihu article page and fill the comment editor with keyword."""
     article_url = str(article_url or "").strip()
     if not article_url:
@@ -153,7 +175,14 @@ def run(keyword: str, article_url: str = ""):
         log("Zhihu login state not confirmed; skip comment")
         return
 
-    use_ai, keyword, requirement_text = _prepare_comment_request(keyword)
+    if use_ai is None:
+        use_ai, keyword, requirement_text = _prepare_comment_request(keyword)
+    else:
+        use_ai = bool(use_ai)
+        keyword = str(keyword or "").strip()
+        requirement_text = str(requirement_text or "").strip()
+        if not use_ai and (not keyword or keyword == "-1"):
+            raise RuntimeError("Missing Zhihu comment content")
 
     goto(article_url)
     wait_for_element(".RichContent, #content, article, .Post-RichText", timeout=30)

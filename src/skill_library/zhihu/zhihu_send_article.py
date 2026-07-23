@@ -177,6 +177,80 @@ def _wait_for_ai_picture_textarea(timeout: int = 20) -> bool:
     return False
 
 
+def _close_publish_success_modal(timeout: int = 20) -> bool:
+    """Close the publish-success overlay before follow-up article actions."""
+    for _ in range(timeout * 2):
+        try:
+            target = run_js(
+                """(() => {
+                const visible = (node) => {
+                    if (!node) return false;
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 &&
+                        style.display !== "none" &&
+                        style.visibility !== "hidden";
+                };
+                document.querySelectorAll("[data-agentic-publish-close='1']")
+                    .forEach((node) => node.removeAttribute("data-agentic-publish-close"));
+
+                const candidates = Array.from(document.querySelectorAll(
+                    "svg.Zi--Close,svg[class*='Zi--Close']"
+                )).filter(visible);
+                const closeSvg = candidates.find((svg) => {
+                    let ancestor = svg.parentElement;
+                    for (let depth = 0; ancestor && depth < 12; depth += 1) {
+                        const text = (ancestor.textContent || "").replace(/\\s+/g, "");
+                        if (text.includes("\u53d1\u5e03\u6210\u529f")) return true;
+                        ancestor = ancestor.parentElement;
+                    }
+                    return false;
+                });
+                if (!closeSvg) return null;
+
+                closeSvg.setAttribute("data-agentic-publish-close", "1");
+                closeSvg.scrollIntoView({ block: "center", inline: "center" });
+                const rect = closeSvg.getBoundingClientRect();
+                return {
+                    tag: closeSvg.tagName,
+                    className: String(closeSvg.getAttribute("class") || "").slice(0, 100),
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2,
+                };
+                })()"""
+            )
+        except Exception as exc:
+            log(f"Zhihu publish-success modal detection waiting for navigation: {exc}")
+            wait(0.5)
+            continue
+        if target:
+            mouse_click(target["x"], target["y"])
+            wait_for_navigation(timeout=5)
+            wait(0.5)
+            try:
+                still_open = run_js(
+                    """(() => Array.from(document.querySelectorAll("h1,h2,h3,h4,div,span"))
+                        .some((node) => {
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            const text = (node.textContent || "").replace(/\\s+/g, "");
+                            return rect.width > 0 && rect.height > 0 &&
+                                style.display !== "none" && style.visibility !== "hidden" &&
+                                text === "\u53d1\u5e03\u6210\u529f";
+                        }))()"""
+                )
+            except Exception as exc:
+                log(f"Zhihu publish-success modal closed during navigation: {exc}")
+                return True
+            if not still_open:
+                log(f"Zhihu publish-success modal closed: {target}")
+                return True
+            log(f"Zhihu publish-success close click did not dismiss modal: {target}")
+        wait(0.5)
+    log("Zhihu publish-success modal was not shown")
+    return False
+
+
 def _ai_picture_debug_snapshot():
     return run_js(
         """(() => {
@@ -678,6 +752,22 @@ def run(title: str, keyword: str, add_picture=False):
 
     wait_for_element("button.Button--primary", timeout=15)
     click("button.Button--primary")
-    wait(2)
+    wait_for_navigation(timeout=30)
+    wait(1)
 
-    log(f"Zhihu article publish clicked: {title}")
+    article_url = ""
+    for _ in range(30):
+        current_url = str(get_url() or "").strip()
+        if "/p/" in current_url:
+            article_url = current_url.split("#", 1)[0].split("?", 1)[0]
+            if article_url.endswith("/edit"):
+                article_url = article_url[:-5]
+            break
+        wait(0.5)
+
+    if not article_url:
+        raise RuntimeError("Zhihu published article URL was not detected")
+
+    _close_publish_success_modal(timeout=20)
+    log(f"Zhihu article publish clicked: {title}; URL: {article_url}")
+    return article_url

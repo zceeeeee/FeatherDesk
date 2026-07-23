@@ -312,6 +312,11 @@ class SkillRouter:
         title_value = json.dumps(extracted.get("title", "-1"), ensure_ascii=False)
         keyword_value = json.dumps(extracted.get("keyword", "-1"), ensure_ascii=False)
         add_picture_value = json.dumps(extracted.get("add-picture", "no"), ensure_ascii=False)
+        is_total_workflow = skill.id == "domain/zhihu_total"
+        comment_keyword_value = json.dumps(
+            extracted.get("comment_keyword", "-1"),
+            ensure_ascii=False,
+        )
         title_ai_generate = bool(skill.params.get("title", {}).get("ai_generate", False))
         keyword_ai_generate = bool(
             skill.params.get("keyword", {}).get("ai_generate", False)
@@ -426,6 +431,26 @@ class SkillRouter:
             "        return False\n"
             "    return False\n"
         )
+        comment_setup = ""
+        if is_total_workflow:
+            comment_setup = (
+                f"__comment_use_ai, __param_comment_keyword, __comment_requirement = "
+                f"_prepare_comment_request({comment_keyword_value})\n\n"
+            )
+        if is_total_workflow:
+            run_call = (
+                "run(title=__param_title, keyword=__param_keyword, "
+                "add_picture=__param_add_picture, "
+                "comment_keyword=__param_comment_keyword, "
+                "comment_use_ai=__comment_use_ai, "
+                "comment_requirement=__comment_requirement)"
+            )
+        else:
+            run_call = (
+                "run(title=__param_title, keyword=__param_keyword, "
+                "add_picture=__param_add_picture)"
+            )
+
         return (
             f"{source_code}"
             f"{helper}"
@@ -433,8 +458,9 @@ class SkillRouter:
             f"__param_keyword = __agentic_prepare_zhihu_content({keyword_value}, {keyword_ai_generate!r})\n"
             f"__param_title = __agentic_prepare_zhihu_title({title_value}, __param_keyword, {title_ai_generate!r})\n\n"
             f"__param_add_picture = __agentic_prepare_zhihu_add_picture({add_picture_value})\n\n"
+            f"{comment_setup}"
             f"{auth_wait}"
-            f"# 自动调用\nrun(title=__param_title, keyword=__param_keyword, add_picture=__param_add_picture)"
+            f"# 自动调用\n{run_call}"
         )
 
     def _build_wps_writer_param_script(
@@ -1123,6 +1149,32 @@ class SkillRouter:
     # 脚本构建
     # -------------------------------------------------------------------
 
+    def _compose_zhihu_total_source(self, workflow_source: str) -> str:
+        """Compose existing Zhihu adapters into one executable namespace."""
+        if not self._library_dir:
+            return workflow_source
+
+        dependencies = (
+            ("zhihu/zhihu_send_article.py", "__zhihu_send_run"),
+            ("zhihu/zhihu_comment.py", "__zhihu_comment_run"),
+            ("zhihu/zhihu_shoucang.py", "__zhihu_shoucang_run"),
+        )
+        parts: List[str] = []
+        for relative_path, entry_name in dependencies:
+            path = self._library_dir / relative_path
+            source = path.read_text(encoding="utf-8")
+            source, count = re.subn(
+                r"(?m)^def run\(",
+                f"def {entry_name}(",
+                source,
+                count=1,
+            )
+            if count != 1:
+                raise RuntimeError(f"无法组合知乎技能入口：{relative_path}")
+            parts.append(source)
+        parts.append(workflow_source)
+        return "\n\n".join(parts)
+
     def build_script(self, skill: SkillRouterInfo, task: str) -> str:
         """根据技能定义和任务描述生成可执行脚本。
 
@@ -1140,6 +1192,10 @@ class SkillRouter:
             return ""
 
         source_code = source_path.read_text(encoding="utf-8")
+
+        if skill.id == "domain/zhihu_total" and skill.params:
+            source_code = self._compose_zhihu_total_source(source_code)
+            return self._build_parametrized_script(source_code, skill, task)
 
         if skill.id == "domain/wps_writer_export" and skill.params:
             return self._build_parametrized_script(source_code, skill, task)
@@ -1176,7 +1232,7 @@ class SkillRouter:
             if extracted.get(param_name, "-1") == "-1" and value and value != "-1":
                 extracted[param_name] = value
 
-        if skill.id == "domain/zhihu_send":
+        if skill.id in {"domain/zhihu_send", "domain/zhihu_total"}:
             return self._build_zhihu_article_param_script(source_code, skill, extracted)
 
         if skill.id == "domain/wps_writer_export":

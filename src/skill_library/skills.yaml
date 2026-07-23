@@ -1032,6 +1032,52 @@ skills:
           - "(?:(配图|加图|加图片|生成图片|插入图片|AI\\s*配图|ai\\s*picture|add[-_ ]?picture))"
     confirm_before_run: true
 
+  - id: "domain/zhihu_total"
+    name: "知乎发布互动全流程"
+    type: "domain"
+    platform: "zhihu"
+    action: "publish_comment_collect"
+    triggers: ["知乎全流程", "知乎一键流程", "知乎发布评论收藏"]
+    trigger_patterns:
+      - "^(?:知乎|zhihu)\\s*(?:全流程|一键流程|发布评论收藏)[。.!！?？\\s]*$"
+      - "(?:知乎|zhihu).*(?:发布|写文章).*(?:评论).*(?:收藏)"
+    url_patterns: ["zhihu.com", "zhuanlan.zhihu.com"]
+    description: "在知乎发布文章，记录文章网址，然后依次评论并收藏该文章"
+    version: "1.0.0"
+    examples:
+      - "知乎全流程：写一篇文章，然后评论并收藏"
+      - "在知乎发布文章，发布后发表评论并收藏"
+    params:
+      title:
+        type: title
+        required: true
+        description: "文章标题"
+        ai_generate: true
+        extract_patterns:
+          - "(?:标题|题目|title)\\s*(?:是|为|:|：)?\\s*['\"“‘]?(.+?)['\"”’]?(?=\\s*(?:内容|正文|文章内容|body|content|评论内容|comment)\\s*(?:是|为|:|：)?|$)"
+      keyword:
+        type: content
+        required: true
+        description: "文章内容"
+        ai_generate: true
+        extract_patterns:
+          - "(?:内容|正文|文章内容|body|content)\\s*(?:是|为|:|：)?\\s*(.+?)(?=\\s*(?:评论内容|评论|comment)\\s*(?:是|为|:|：)|$)"
+      add-picture:
+        type: boolean
+        required: false
+        default: "no"
+        confirm: true
+        description: "是否在文章正文中插入 AI 生成图片"
+        extract_patterns:
+          - "(?:(配图|加图|加图片|生成图片|插入图片|AI\\s*配图|ai\\s*picture|add[-_ ]?picture))"
+      comment_keyword:
+        type: content
+        required: true
+        description: "评论内容"
+        extract_patterns:
+          - "(?:评论内容|评论|comment)\\s*(?:是|为|:|：)?\\s*(.+)$"
+    confirm_before_run: true
+
   - id: "domain/zhihu_approve"
     name: "知乎点赞"
     type: "domain"
@@ -1046,6 +1092,25 @@ skills:
         type: url
         required: true
         description: "对应操作的文章地址"
+        extract_patterns:
+          - "(https?://[^\\s，。！？；;]+)"
+    confirm_before_run: true
+
+  - id: "domain/zhihu_shoucang"
+    name: "知乎收藏"
+    type: "domain"
+    triggers: ["知乎收藏"]
+    url_patterns: ["zhihu.com", "zhuanlan.zhihu.com"]
+    description: "收藏指定的知乎文章"
+    version: "1.0.0"
+    examples:
+      - "收藏这篇知乎文章"
+      - "在知乎收藏一篇文章"
+    params:
+      article_url:
+        type: url
+        required: true
+        description: "需要收藏的知乎文章地址"
         extract_patterns:
           - "(https?://[^\\s，。！？；;]+)"
     confirm_before_run: true
@@ -1152,8 +1217,16 @@ sources:
     file: "zhihu/zhihu_send_article.py"
     entry: "run"
 
+  - id: "domain/zhihu_total"
+    file: "zhihu/zhihu_total.py"
+    entry: "run"
+
   - id: "domain/zhihu_approve"
     file: "zhihu/zhihu_approve.py"
+    entry: "run"
+
+  - id: "domain/zhihu_shoucang"
+    file: "zhihu/zhihu_shoucang.py"
     entry: "run"
 
   - id: "domain/zhihu_comment"
