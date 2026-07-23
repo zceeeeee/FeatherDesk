@@ -1,85 +1,116 @@
 """BOSS 直聘搜索适配器。
 
-在 BOSS 直聘搜索指定关键词，支持城市筛选。
+在 BOSS 直聘搜索指定关键词，支持城市筛选、多页数据采集、
+LLM 分析总结和 PDF 报告导出。
+
+注意：此文件在脚本沙箱中执行，不能使用 import。
+所有正则和复杂逻辑在 layer_3/boss_results.py 中处理。
 """
 
-# BOSS 直聘城市代码
-_CITY_CODES = {
-    "全国": "100010000",
-    "北京": "101010100",
-    "上海": "101020100",
-    "广州": "101280100",
-    "深圳": "101280600",
-    "杭州": "101210100",
-    "成都": "101270100",
-    "南京": "101190100",
-    "武汉": "101200100",
-    "西安": "101110100",
-    "苏州": "101190400",
-    "长沙": "101250100",
-    "天津": "101030100",
-    "重庆": "101040100",
-    "郑州": "101180100",
-    "东莞": "101281600",
-    "青岛": "101120200",
-    "合肥": "101220100",
-    "厦门": "101230200",
-    "昆明": "101290100",
-    "大连": "101070200",
-    "珠海": "101280700",
-    "佛山": "101280800",
-    "宁波": "101210400",
-}
 
-# 用于从关键词中识别城市
-_ALL_CITIES = "|".join(_CITY_CODES.keys())
+def _jobs_to_text(jobs: list) -> str:
+    """将职位列表格式化为文本，供 LLM 分析。"""
+    lines = []
+    for i, job in enumerate(jobs, 1):
+        parts = [str(i) + ". " + str(job.get("title", ""))]
+        if job.get("company"):
+            parts.append("   公司: " + str(job["company"]))
+        if job.get("salary"):
+            parts.append("   薪资: " + str(job["salary"]))
+        if job.get("area"):
+            parts.append("   地点: " + str(job["area"]))
+        if job.get("tags"):
+            parts.append("   要求: " + str(job["tags"]))
+        lines.append("\n".join(parts))
+    return "\n\n".join(lines)
 
 
-def _extract_city_from_keyword(keyword: str) -> tuple:
-    """从关键词中提取城市和纯关键词。
-
-    Returns:
-        (city, pure_keyword) 元组。
-    """
-    import re
-
-    # 匹配 "深圳的AI产品经理" 或 "深圳AI产品经理" 或 "AI产品经理深圳"
-    match = re.search(
-        rf"({_ALL_CITIES})(?:的|地|\\s)*(.+)",
-        keyword,
-    )
-    if match:
-        return match.group(1), match.group(2).strip()
-
-    # 匹配关键词末尾的城市 "AI产品经理在深圳"
-    match = re.search(
-        rf"(.+?)(?:在|去|到)({_ALL_CITIES})$",
-        keyword,
-    )
-    if match:
-        return match.group(2), match.group(1).strip()
-
-    return "全国", keyword
-
-
-def run(keyword: str):
-    """在 BOSS 直聘搜索职位。
+def run(keyword: str, max_pages: int = 5):
+    """在 BOSS 直聘搜索职位，采集多页数据，分析并导出 PDF 报告。
 
     Args:
         keyword: 搜索内容，包含城市和职位关键词（如 "深圳的AI产品经理"）。
-
-    流程:
-        1. 从关键词中解析城市和职位
-        2. 构造 BOSS 直聘搜索结果页 URL
-        3. 直接导航到结果页
+        max_pages: 采集页数，默认 5。
     """
+    # 1. 解析关键词
     keyword = str(keyword or "").strip()
     if not keyword or keyword == "-1":
         raise ValueError("BOSS直聘搜索需要职位关键词")
 
-    city, pure_keyword = _extract_city_from_keyword(keyword)
-    city_code = _CITY_CODES.get(city, _CITY_CODES["全国"])
-    target_url = f"https://www.zhipin.com/web/geek/jobs?city={city_code}&query={url_quote(pure_keyword)}"
+    search_url, city, pure_keyword = build_boss_search_url(keyword)
 
-    goto(target_url)
-    log(f"BOSS直聘搜索完成: {pure_keyword} ({city})")
+    # 2. 登录检查 — 先打开 BOSS 首页，等待用户完成登录
+    goto("https://www.zhipin.com")
+    wait(2)
+    panel_show()
+    panel_prompt(
+        "请在浏览器中完成 BOSS 直聘登录，"
+        "登录完成后请点击 [确认] 继续。"
+        "\n首次登录会自动保存，后续无需重复登录。"
+    )
+    log("登录确认完成，开始搜索")
+
+    # 3. 导航到搜索页，等待职位卡片加载
+    goto(search_url)
+    wait_for_element(".job-card-wrapper", timeout=15)
+    wait(2)
+    log("BOSS直聘搜索: " + pure_keyword + " (" + city + ")")
+
+    # 4. 跨页数据采集
+    result = boss_collect_jobs(pure_keyword, max_pages=max_pages)
+    jobs = result.get("jobs", [])
+    log("采集完成: 共 " + str(len(jobs)) + " 个职位")
+
+    if not jobs:
+        log("未采集到职位数据，跳过分析和导出")
+        return result
+
+    # 5. LLM 分析总结
+    jobs_text = _jobs_to_text(jobs)
+    stats_text = ""
+    if result.get("salary_stats"):
+        s = result["salary_stats"]
+        stats_text = (
+            "\n薪资统计: 共 " + str(s["count"]) + " 个岗位, "
+            "最低 " + str(s["min"]) + "K, 最高 " + str(s["max"]) + "K, "
+            "平均 " + str(s["average"]) + "K, 中位数 " + str(s["median"]) + "K"
+        )
+    top_text = ""
+    if result.get("top_companies"):
+        companies = [str(c["name"]) + "(" + str(c["count"]) + "个)" for c in result["top_companies"][:5]]
+        top_text = "\n招聘岗位最多的公司: " + ", ".join(companies)
+
+    analysis_prompt = (
+        "请对以下 BOSS 直聘 '" + pure_keyword + "' (" + city + ") 职位数据进行分析总结，"
+        "包括：岗位概况、薪资分布特点、招聘趋势、值得关注的公司和岗位。\n\n"
+        "数据概览: 共 " + str(len(jobs)) + " 个职位" + stats_text + top_text + "\n\n"
+        "详细数据:\n" + jobs_text
+    )
+    analysis = llm_generate_text(analysis_prompt)
+    log("LLM 分析完成")
+
+    # 6. WPS 导出 PDF
+    columns = ["序号", "职位", "公司", "薪资", "地点", "要求"]
+    rows = []
+    for i, job in enumerate(jobs, 1):
+        rows.append([
+            str(i),
+            str(job.get("title", "")),
+            str(job.get("company", "")),
+            str(job.get("salary", "")),
+            str(job.get("area", "")),
+            str(job.get("tags", "")),
+        ])
+
+    table_json = [{"title": "职位列表", "columns": columns, "rows": rows}]
+    export_result = wps_writer_export(
+        title="BOSS直聘 " + pure_keyword + "(" + city + ") 职位分析报告",
+        body=analysis,
+        table_json=table_json,
+        output_format="pdf",
+    )
+    log("PDF 导出完成")
+
+    result["analysis"] = analysis
+    result["export"] = export_result
+    return result

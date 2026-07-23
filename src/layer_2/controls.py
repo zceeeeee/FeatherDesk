@@ -682,7 +682,7 @@ def save_cookies(domain: str) -> str:
 
 
 def load_cookies(domain: str) -> str:
-    """加载指定站点的 cookie / localStorage（需重启 context）。
+    """加载指定站点的 cookie / localStorage（自动启动浏览器）。
 
     Args:
         domain: 站点名（对应 domains/{domain}.yaml）。
@@ -697,9 +697,7 @@ def load_cookies(domain: str) -> str:
         return f"未找到 {domain} 的登录状态"
 
     bm = get_browser_manager()
-    if not bm.is_alive():
-        return "加载失败: 浏览器未启动"
-
+    # 浏览器未启动时自动启动并加载 cookies
     bm.launch_with_domain(domain)
     return f"已加载 {domain} 的登录状态"
 
@@ -811,6 +809,89 @@ def taobao_collect_products(keyword: str, max_items: int = 20) -> dict:
     return build_taobao_search_result(keyword, products, max_products=5)
 
 
+def boss_collect_jobs(keyword: str, max_pages: int = 5) -> dict:
+    """Collect BOSS Zhipin jobs across multiple pages.
+
+    Navigates through ``max_pages`` pages of search results,
+    extracts job cards from each page, and returns a structured result.
+
+    Args:
+        keyword: Search keyword (pure keyword without city prefix).
+        max_pages: Number of pages to collect (default 5).
+
+    Returns:
+        Structured dict with ``type: "boss_job_search"``.
+    """
+    from src.layer_3.boss_results import (
+        BossResultError,
+        build_boss_search_result,
+        enrich_boss_salaries,
+        extract_boss_jobs,
+    )
+
+    page = get_browser_manager().get_page()
+    all_jobs: list[dict] = []
+
+    # Selectors for pagination (from domains/boss.yaml)
+    next_selectors = [
+        ".ui-icon-arrow-right",
+        ".pagination .next",
+        "a.next",
+        ".ui-pager li:last-child a",
+        "[class*='arrow-right']",
+    ]
+
+    for page_num in range(max_pages):
+        # Scroll to bottom multiple times to trigger lazy loading
+        for _ in range(8):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(1200)
+
+        try:
+            jobs = extract_boss_jobs(page, max_items=30)
+            # OCR enrich salaries that the DOM couldn't extract
+            jobs = enrich_boss_salaries(page, jobs)
+            all_jobs.extend(jobs)
+        except BossResultError as exc:
+            # Log but continue — page might still be loading
+            pass
+
+        if page_num < max_pages - 1:
+            # Try clicking the next page button
+            clicked = False
+            for sel in next_selectors:
+                try:
+                    next_btn = page.locator(sel).first
+                    if next_btn.is_visible(timeout=2000):
+                        next_btn.click(timeout=5000)
+                        page.wait_for_timeout(2000)
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                break
+
+    return build_boss_search_result(keyword, all_jobs)
+
+
+def build_boss_search_url(keyword: str) -> tuple[str, str, str]:
+    """Build the BOSS Zhipin search URL from a keyword string.
+
+    Parses the city from the keyword (e.g. "深圳的AI产品经理"),
+    constructs the search URL, and returns (url, city, pure_keyword).
+
+    Args:
+        keyword: Search keyword string, may include city prefix.
+
+    Returns:
+        (url, city_name, pure_keyword) tuple.
+    """
+    from src.layer_3.boss_results import build_boss_search_url as _build
+
+    return _build(keyword)
+
+
 def wechat_send_official_account_message(
     account_name: str,
     message: str,
@@ -896,6 +977,8 @@ def get_controls_exports() -> Dict[str, Any]:
         "wps_document_read": wps_document_read,
         "wps_document_rewrite": wps_document_rewrite,
         "taobao_collect_products": taobao_collect_products,
+        "boss_collect_jobs": boss_collect_jobs,
+        "build_boss_search_url": build_boss_search_url,
         "wechat_follow_official_account": wechat_follow_official_account,
         "wechat_send_official_account_message": wechat_send_official_account_message,
         "wechat_send_contact_message": wechat_send_contact_message,
