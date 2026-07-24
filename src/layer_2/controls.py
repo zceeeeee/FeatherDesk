@@ -810,14 +810,15 @@ def taobao_collect_products(keyword: str, max_items: int = 20) -> dict:
 
 
 def boss_collect_jobs(keyword: str, max_pages: int = 5) -> dict:
-    """Collect BOSS Zhipin jobs across multiple pages.
+    """Collect BOSS Zhipin jobs via infinite scroll.
 
-    Navigates through ``max_pages`` pages of search results,
-    extracts job cards from each page, and returns a structured result.
+    BOSS 直聘使用无限滚动加载，没有翻页按钮。
+    ``max_pages`` 按 "每页 4 个卡片" 换算为目标卡片数（max_pages * 4），
+    通过反复滚动页面触发懒加载，直到达到目标数量或无新卡片加载。
 
     Args:
         keyword: Search keyword (pure keyword without city prefix).
-        max_pages: Number of pages to collect (default 5).
+        max_pages: 逻辑页数，默认 5（实际目标 5*4=20 个卡片）。
 
     Returns:
         Structured dict with ``type: "boss_job_search"``.
@@ -830,49 +831,69 @@ def boss_collect_jobs(keyword: str, max_pages: int = 5) -> dict:
     )
 
     page = get_browser_manager().get_page()
+    last_debug_info: dict = {}
+
+    # 目标卡片数：每 "页" 4 个卡片
+    target_count = max_pages * 4
+    # 去重集合：用 title|company 作为唯一键
+    seen_keys: set[str] = set()
     all_jobs: list[dict] = []
+    # 连续无新增卡片的轮次上限
+    max_empty_rounds = 3
+    empty_rounds = 0
 
-    # Selectors for pagination (from domains/boss.yaml)
-    next_selectors = [
-        ".ui-icon-arrow-right",
-        ".pagination .next",
-        "a.next",
-        ".ui-pager li:last-child a",
-        "[class*='arrow-right']",
-    ]
+    import logging
+    logger = logging.getLogger(__name__)
 
-    for page_num in range(max_pages):
-        # Scroll to bottom multiple times to trigger lazy loading
-        for _ in range(8):
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.wait_for_timeout(1200)
+    for scroll_round in range(50):  # 最多滚动 50 轮，防止死循环
+        # 滚动到底部触发懒加载
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(1500)
 
         try:
-            jobs = extract_boss_jobs(page, max_items=30)
-            # OCR enrich salaries that the DOM couldn't extract
-            jobs = enrich_boss_salaries(page, jobs)
-            all_jobs.extend(jobs)
+            jobs, debug_info = extract_boss_jobs(page, max_items=target_count * 2)
+            last_debug_info = debug_info
         except BossResultError as exc:
-            # Log but continue — page might still be loading
-            pass
-
-        if page_num < max_pages - 1:
-            # Try clicking the next page button
-            clicked = False
-            for sel in next_selectors:
-                try:
-                    next_btn = page.locator(sel).first
-                    if next_btn.is_visible(timeout=2000):
-                        next_btn.click(timeout=5000)
-                        page.wait_for_timeout(2000)
-                        clicked = True
-                        break
-                except Exception:
-                    continue
-            if not clicked:
+            logger.warning("BOSS scroll round %d extract failed: %s", scroll_round + 1, exc)
+            empty_rounds += 1
+            if empty_rounds >= max_empty_rounds:
                 break
+            continue
 
-    return build_boss_search_result(keyword, all_jobs)
+        # 去重：只保留新卡片
+        new_count = 0
+        for job in jobs:
+            key = str(job.get("title", "")) + "|" + str(job.get("company", ""))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                all_jobs.append(job)
+                new_count += 1
+
+        if new_count == 0:
+            empty_rounds += 1
+            if empty_rounds >= max_empty_rounds:
+                logger.info("BOSS: %d consecutive rounds with no new cards, stopping", max_empty_rounds)
+                break
+        else:
+            empty_rounds = 0
+            logger.info("BOSS scroll round %d: +%d new cards, total %d/%d",
+                        scroll_round + 1, new_count, len(all_jobs), target_count)
+
+        # 已达目标数量
+        if len(all_jobs) >= target_count:
+            logger.info("BOSS: reached target %d cards", target_count)
+            break
+
+    # OCR 补全薪资（只对前 target_count 个）
+    all_jobs = enrich_boss_salaries(page, all_jobs[:target_count])
+
+    result = build_boss_search_result(keyword, all_jobs[:target_count])
+    # 附加调试信息（供脚本层 log 输出）
+    if last_debug_info:
+        result["debug_classes"] = last_debug_info.get("debug_classes", [])
+        result["debug_log"] = last_debug_info.get("debug_log", [])
+        result["body_text_preview"] = last_debug_info.get("body_text_preview", "")
+    return result
 
 
 def build_boss_search_url(keyword: str) -> tuple[str, str, str]:

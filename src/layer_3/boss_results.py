@@ -102,68 +102,126 @@ BOSS_RESULT_SCRIPT = r"""
   const limit = Math.max(1, Number(maxItems) || 30);
   const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
 
-  // BOSS 直聘职位卡片选择器
-  const cards = document.querySelectorAll(".job-card-wrapper");
+  // PUA 私用区字符检测 — BOSS 直聘用自定义字体渲染薪资数字
+  const hasPUA = (s) => {
+    if (!s) return false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if ((c >= 0xE000 && c <= 0xF8FF) || (c >= 0xF0000 && c <= 0xFFFFF)) return true;
+    }
+    return false;
+  };
+
+  // ── 精确选择器：直接匹配 BOSS 直聘实际 DOM ──
+  // 卡片容器: li.job-card-box
+  //   ├── div.job-info
+  //   │   ├── div.job-title > a.job-name (职位名) + span.job-salary (薪资 PUA)
+  //   │   └── ul.tag-list > li (标签)
+  //   └── div.job-card-footer
+  //       ├── a.boss-info > span.boss-name (公司名)
+  //       └── span.company-location (地点)
+  const cards = Array.from(document.querySelectorAll("li.job-card-box"));
+  let matchedSelector = "li.job-card-box";
+
+  // 降级
+  if (cards.length === 0) {
+    const fallback = document.querySelectorAll(
+      ".job-card-box, [class*='job-card-box'], .job-card-wrap li"
+    );
+    if (fallback.length > 0) {
+      cards.push(...fallback);
+      matchedSelector = "fallback-job-card-box";
+    }
+  }
+
   const jobs = [];
   const seen = new Set();
+  const debugLog = [];
 
   for (const card of cards) {
     if (jobs.length >= limit) break;
 
-    // 职位名
-    const titleEl = card.querySelector(".job-name");
-    const title = clean(titleEl ? (titleEl.innerText || titleEl.textContent) : "");
+    // ── 职位名 ──
+    const titleEl = card.querySelector("a.job-name, .job-name, [class*='job-name']");
+    const title = clean(titleEl ? (titleEl.innerText || titleEl.textContent || "") : "");
     if (!title) continue;
 
-    // 公司名
-    const companyEl = card.querySelector(".company-name a");
-    const company = clean(companyEl ? (companyEl.innerText || companyEl.textContent) : "");
+    // ── 职位链接 ──
+    const jobUrl = titleEl && titleEl.href ? titleEl.href : "";
+
+    // ── 公司名（.boss-name，不是 .company-name）──
+    const bossNameEl = card.querySelector(".boss-name, [class*='boss-name']");
+    let company = clean(bossNameEl ? (bossNameEl.innerText || bossNameEl.textContent) : "");
+
+    // 降级：从 footer 的链接中找
+    if (!company) {
+      const footerLinks = card.querySelectorAll(".job-card-footer a, .boss-info");
+      for (const a of footerLinks) {
+        const text = clean(a.innerText || a.textContent || "");
+        // 排除 "查看更多信息"、"举报" 等非公司名文本
+        if (text && text !== title && text.length >= 2 && text.length <= 30
+            && !text.includes("查看") && !text.includes("举报") && !text.includes("更多")
+            && !text.includes("APP") && !text.includes("搜索")) {
+          company = text;
+          break;
+        }
+      }
+    }
+
+    // 去重
     const key = title + "|" + company;
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // 薪资 — 在 .job-info 下的 .salary
-    const salaryEl = card.querySelector(".job-info .salary, .salary");
-    const salary = clean(salaryEl ? (salaryEl.innerText || salaryEl.textContent) : "");
+    // ── 薪资（.job-salary，含 PUA 字符）──
+    const salaryEl = card.querySelector(".job-salary, [class*='job-salary']");
+    const salaryRaw = salaryEl ? (salaryEl.innerText || salaryEl.textContent || "") : "";
+    const salaryClean = clean(salaryRaw);
+    const salary_needs_ocr = hasPUA(salaryRaw) || /^[\s\-~Kk万千元\/天月]*$/.test(salaryClean.replace(/\d+/g, ""));
 
-    // 地点 — 在 .job-info 下的 .job-area
-    const areaEl = card.querySelector(".job-info .job-area, .job-area");
+    // ── 地点（.company-location）──
+    const areaEl = card.querySelector(".company-location, [class*='company-location']");
     const area = clean(areaEl ? (areaEl.innerText || areaEl.textContent) : "");
 
-    // 要求标签 — 在 .job-info 下的 .tag-list 或 info-desc
-    const tagListEl = card.querySelector(".job-info .tag-list");
-    let tags = clean(tagListEl ? (tagListEl.innerText || tagListEl.textContent) : "");
-
-    // 如果 tag-list 为空，尝试从所有 info-desc 中提取（跳过第一个，那是薪资+地点）
-    if (!tags) {
-      const descs = card.querySelectorAll(".job-info .info-desc");
-      const tagParts = [];
-      for (let i = 1; i < descs.length; i++) {
-        const t = clean(descs[i].innerText || descs[i].textContent);
-        if (t) tagParts.push(t);
-      }
-      tags = tagParts.join(" ");
+    // ── 标签（.tag-list li）──
+    const tagLis = card.querySelectorAll(".tag-list li, [class*='tag-list'] li");
+    const tagParts = [];
+    for (const li of tagLis) {
+      const t = clean(li.innerText || li.textContent || "");
+      if (t) tagParts.push(t);
     }
+    const tags = tagParts.join(" ");
 
     // 公司链接
-    const companyLink = companyEl && companyEl.href ? companyEl.href : "";
+    const bossLinkEl = card.querySelector("a.boss-info, .boss-info");
+    const companyUrl = bossLinkEl && bossLinkEl.href ? bossLinkEl.href : "";
 
-    // 职位链接
-    const jobLinkEl = card.querySelector("a[href*='/job_detail']");
-    const jobUrl = jobLinkEl ? jobLinkEl.href : "";
+    // 调试
+    if (debugLog.length < 3) {
+      debugLog.push({
+        title: title.substring(0, 40),
+        company: company.substring(0, 20),
+        salary_raw: salaryClean.substring(0, 20),
+        salary_pua: salary_needs_ocr,
+        area: area.substring(0, 20),
+        tags: tags.substring(0, 30),
+      });
+    }
 
     jobs.push({
-      title: title,
-      company: company,
-      salary: salary,
-      area: area,
-      tags: tags,
-      job_url: jobUrl,
-      company_url: companyLink,
+      title: title, company: company,
+      salary: salaryClean, salary_needs_ocr: salary_needs_ocr,
+      area: area, tags: tags,
+      job_url: jobUrl, company_url: companyUrl,
     });
   }
 
-  return { jobs: jobs, total_cards: cards.length };
+  return {
+    jobs: jobs,
+    total_cards: cards.length,
+    matched_selector: matchedSelector,
+    debug_log: debugLog,
+  };
 }
 """
 
@@ -219,6 +277,7 @@ def _normalize_job(raw: dict[str, Any]) -> dict[str, Any] | None:
         "salary_min": salary_info["min"],
         "salary_max": salary_info["max"],
         "salary_months": salary_info["months"],
+        "salary_needs_ocr": bool(raw.get("salary_needs_ocr", False)),
         "area": _clean(raw.get("area")),
         "tags": _clean(raw.get("tags")),
         "job_url": _clean(raw.get("job_url")),
@@ -226,8 +285,14 @@ def _normalize_job(raw: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def extract_boss_jobs(page: Any, *, max_items: int = 30) -> list[dict[str, Any]]:
-    """Extract visible job cards from a BOSS Zhipin result page."""
+def extract_boss_jobs(page: Any, *, max_items: int = 30) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Extract visible job cards from a BOSS Zhipin result page.
+
+    Returns:
+        Tuple of (jobs_list, debug_info_dict).
+        debug_info contains matched_selector, debug_classes, debug_html_snippets, body_text_preview.
+    """
+    debug_info: dict[str, Any] = {}
     if page is None or not hasattr(page, "evaluate"):
         raise BossResultError("BOSS result page is unavailable")
     try:
@@ -235,16 +300,39 @@ def extract_boss_jobs(page: Any, *, max_items: int = 30) -> list[dict[str, Any]]
     except Exception as exc:
         raise BossResultError(f"Failed to extract BOSS results: {exc}") from exc
 
-    raw_jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+    if not isinstance(payload, dict):
+        raise BossResultError(f"Unexpected payload type: {type(payload)}")
+
+    raw_jobs = payload.get("jobs", [])
     if not isinstance(raw_jobs, list):
-        return []
+        raw_jobs = []
+
+    # 收集调试信息
+    debug_info["matched_selector"] = payload.get("matched_selector", "")
+    debug_info["debug_classes"] = payload.get("debug_classes", [])
+    debug_info["debug_log"] = payload.get("debug_log", [])
+    debug_info["body_text_preview"] = payload.get("body_text_preview", "")
+
+    # 始终记录提取日志
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("BOSS extract: %d raw jobs, selector=%r", len(raw_jobs), debug_info["matched_selector"])
+    for entry in debug_info.get("debug_log", []):
+        logger.info("BOSS card: title=%r company=%r tag=%s class=%s children=%d salary_pua=%s",
+                     entry.get("title"), entry.get("company"),
+                     entry.get("card_tag"), entry.get("card_class"),
+                     entry.get("card_children"), entry.get("salary_pua"))
+    if not raw_jobs:
+        logger.warning("BOSS extract: 0 jobs. classes=%s", debug_info["debug_classes"][:10])
+        if debug_info["body_text_preview"]:
+            logger.warning("BOSS body: %s", debug_info["body_text_preview"][:300])
 
     jobs: list[dict[str, Any]] = []
     for raw in raw_jobs[: max(1, int(max_items))]:
         normalized = _normalize_job(raw)
         if normalized:
             jobs.append(normalized)
-    return jobs
+    return jobs, debug_info
 
 
 def _ocr_salary_from_card(page: Any, card_index: int) -> str:
@@ -265,11 +353,12 @@ def _ocr_salary_from_card(page: Any, card_index: int) -> str:
     if ocr is None:
         return ""
 
-    # Find the salary element within the Nth job card
+    # Find the salary element — 匹配 li.job-card-box 内的 .job-salary
     salary_el = page.locator(
-        ".job-card-wrapper .salary, "
-        ".job-card-wrapper [class*='salary'], "
-        ".job-list .job-card .salary"
+        "li.job-card-box .job-salary, "
+        ".job-card-box .job-salary, "
+        ".job-card-wrap .job-salary, "
+        "[class*='job-salary']"
     ).nth(card_index)
 
     try:
@@ -305,15 +394,17 @@ def _ocr_salary_from_card(page: Any, card_index: int) -> str:
 
 
 def enrich_boss_salaries(page: Any, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fill in missing salaries by OCR-ing individual job card screenshots.
+    """Fill in missing or obfuscated salaries via OCR.
 
-    For each job with an empty salary field, locates the corresponding
-    job card element on the page, screenshots the salary area, runs
-    Windows OCR, and updates the salary field.
+    BOSS 直聘用 PUA 私用区字符 + 自定义字体渲染薪资数字，
+    DOM 中的 innerText 是无意义的 PUA 字符（清理后只剩 "-K"）。
+    对以下两种情况触发 OCR：
+    1. 薪资字段为空
+    2. JS 标记 salary_needs_ocr=True（检测到 PUA 字符或无效值）
 
     Args:
         page: Playwright page object (must be on the BOSS search results page).
-        jobs: List of job dicts (may have empty salary fields).
+        jobs: List of job dicts (may have empty or obfuscated salary fields).
 
     Returns:
         The same list with salary fields updated in-place.
@@ -323,8 +414,11 @@ def enrich_boss_salaries(page: Any, jobs: list[dict[str, Any]]) -> list[dict[str
 
     for i, job in enumerate(jobs):
         salary = _clean(job.get("salary"))
-        if salary:
-            continue  # already has salary from DOM
+        needs_ocr = job.get("salary_needs_ocr", False)
+
+        # 已有有效薪资（包含数字）且无需 OCR → 跳过
+        if salary and not needs_ocr and re.search(r"\d", salary):
+            continue
 
         ocr_salary = _ocr_salary_from_card(page, i)
         if ocr_salary:
@@ -343,6 +437,9 @@ def build_boss_search_result(
 ) -> dict[str, Any]:
     """Build a structured result artifact from collected jobs."""
     normalized = [item for item in (_normalize_job(j) for j in jobs) if item]
+    # 清除内部标记
+    for item in normalized:
+        item.pop("salary_needs_ocr", None)
 
     salaries = [j["salary_min"] for j in normalized if j.get("salary_min") is not None]
     salary_stats = None
