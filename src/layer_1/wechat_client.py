@@ -59,6 +59,15 @@ SEARCH_ACCOUNTS_TAB_REL = (0.24, 0.14)
 SEARCH_RESULT_REGION_SIZE = (1120, 680)
 SEARCH_RESULT_FIRST_ACCOUNT_OFFSET = (240, 240)
 SEARCH_RESULT_FIRST_ACCOUNT_POINT = (440, 460)
+OFFICIAL_SEARCH_ENTRY_POINT = (50, 530)
+OFFICIAL_SEARCH_ANCHOR_POINT = (610, 460)
+OFFICIAL_SEARCH_ANCHOR_REGION_SIZE = (260, 120)
+OFFICIAL_SEARCH_INPUT_POINT = (260, 55)
+OFFICIAL_SEARCH_INPUT_OFFSET_FROM_BUTTON = (-520, 0)
+OFFICIAL_SEARCH_TOP_REGION_HEIGHT = 150
+OFFICIAL_SEARCH_ACCOUNTS_TAB_POINT = (320, 200)
+OFFICIAL_SEARCH_FIRST_RESULT_POINT = (560, 475)
+OFFICIAL_SEARCH_ANCHOR_TEXT = "\u641c\u4e00\u641c"
 SEARCH_RESULT_WINDOW_DETECT_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_TIMEOUT = 10.0
@@ -1667,41 +1676,44 @@ class PywinautoWechatAutomation:
     def search_official_account(self, account_name: str) -> None:
         self._require_window()
         self._normalize_current_window()
-        main_handle = self._window_handle(self.window)
-        search_before_handles = {main_handle} if main_handle else set()
-        self._send_keys("^f")
-        time.sleep(0.5)
-        self._send_keys("^a")
-        self._paste_or_type(account_name)
-        time.sleep(0.5)
-        self._send_keys("{ENTER}")
-        if not self._wait_for_search_result_window(
-            account_name,
+        search_before_handles = self._snapshot_window_handles()
+        if not self._click_screen_point(*OFFICIAL_SEARCH_ENTRY_POINT):
+            raise RuntimeError("Unable to open WeChat Souyisou entry")
+        if not self._switch_to_latest_appex(
             before_handles=search_before_handles,
-            wait_seconds=SEARCH_RESULT_WINDOW_DETECT_SECONDS,
+            timeout=SEARCH_RESULT_WINDOW_DETECT_SECONDS,
+        ):
+            raise RuntimeError("Unable to activate WeChatAppEx Souyisou window")
+        if not self._wait_for_souyisou_anchor(timeout=3.0):
+            logger.warning(
+                "Unable to confirm WeChat Souyisou anchor; "
+                "continuing with fixed search input coordinates"
+            )
+
+        if not self._click_souyisou_search_input():
+            raise RuntimeError("Unable to focus WeChat Souyisou search input")
+        self._paste_or_type(account_name)
+        self._press_enter_in_current_window()
+
+        result_before_handles = self._snapshot_window_handles()
+        if not self._switch_to_latest_appex(
+            before_handles=result_before_handles,
+            timeout=SEARCH_RESULT_WINDOW_DETECT_SECONDS,
         ):
             self._normalize_current_window()
-            self._send_keys("{ENTER}")
-            if not self._wait_for_search_result_window(
-                account_name,
-                before_handles=search_before_handles,
-                wait_seconds=SEARCH_RESULT_WINDOW_DETECT_SECONDS,
-            ):
-                raise RuntimeError(
-                    "Unable to activate WeChatAppEx search result window"
-                )
+        if not self._click_screen_point(*OFFICIAL_SEARCH_ACCOUNTS_TAB_POINT):
+            raise RuntimeError("Unable to click WeChatAppEx account tab")
+        time.sleep(SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS)
+        self._normalize_current_window()
+
         detail_before_handles = self._snapshot_window_handles()
-        if not self._click_search_accounts_tab(timeout=SEARCH_ACCOUNTS_TAB_TIMEOUT):
-            raise RuntimeError("Unable to click WeChatAppEx 账号 tab")
-        if self._click_first_account_result_after_tab(
+        if not self._click_screen_point(*OFFICIAL_SEARCH_FIRST_RESULT_POINT):
+            raise RuntimeError("Unable to click first WeChat official account result")
+        if not self._confirm_after_search_result_click(
             account_name,
             before_handles=detail_before_handles,
         ):
-            return
-        self._click_service_account_result(
-            account_name,
-            before_handles=detail_before_handles,
-        )
+            raise RuntimeError("Unable to confirm WeChat official account home")
 
     def search_contact(self, contact_name: str) -> None:
         self._require_window()
@@ -2661,6 +2673,19 @@ class PywinautoWechatAutomation:
 
         send_keys(keys, pause=0.03)
 
+    def _press_enter_in_current_window(self) -> None:
+        self._require_window()
+        try:
+            self.window.type_keys("{ENTER}", set_foreground=True)
+            return
+        except Exception:
+            logger.debug(
+                "Unable to submit Enter through the WeChat window; "
+                "falling back to keyboard input",
+                exc_info=True,
+            )
+        self._send_keys("{ENTER}")
+
     def _paste_or_type(self, text: str) -> None:
         try:
             import pyperclip  # type: ignore[import-not-found]
@@ -3004,6 +3029,83 @@ class PywinautoWechatAutomation:
             timeout=timeout,
         )
 
+    def _wait_for_souyisou_anchor(self, *, timeout: float = 3.0) -> bool:
+        locator = getattr(self, "image_locator", None)
+        if locator is None:
+            return True
+
+        deadline = time.time() + max(0.0, timeout)
+        while True:
+            self._normalize_windows_for_screenshot()
+            region = self._region_around_screen_point(
+                *OFFICIAL_SEARCH_ANCHOR_POINT,
+                *OFFICIAL_SEARCH_ANCHOR_REGION_SIZE,
+            )
+            match = None
+            if hasattr(locator, "find_ocr_text"):
+                try:
+                    match = locator.find_ocr_text(
+                        region=region,
+                        text=OFFICIAL_SEARCH_ANCHOR_TEXT,
+                    )
+                except Exception:
+                    match = None
+            if match is None and hasattr(locator, "find"):
+                try:
+                    match = locator.find(
+                        WECHAT_SEARCH_TEMPLATE,
+                        region=region,
+                        threshold=0.72,
+                    )
+                except Exception:
+                    match = None
+            if match is not None:
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.2)
+
+    def _click_souyisou_search_input(self) -> bool:
+        locator = getattr(self, "image_locator", None)
+        region = self._current_window_region()
+        if (
+            locator is not None
+            and region is not None
+            and hasattr(locator, "find_green_button")
+        ):
+            left, top, width, height = region
+            top_region = (
+                left,
+                top,
+                width,
+                min(height, OFFICIAL_SEARCH_TOP_REGION_HEIGHT),
+            )
+            try:
+                match = locator.find_green_button(region=top_region, min_area=900)
+            except Exception:
+                match = None
+            if match is not None:
+                offset_x, offset_y = OFFICIAL_SEARCH_INPUT_OFFSET_FROM_BUTTON
+                x = max(left + 30, int(match.x + offset_x))
+                y = int(match.y + offset_y)
+                return self._click_screen_point(x, y)
+
+        return self._click_screen_point(*OFFICIAL_SEARCH_INPUT_POINT)
+
+    @staticmethod
+    def _region_around_screen_point(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> tuple[int, int, int, int]:
+        return (
+            max(0, int(x - width // 2)),
+            max(0, int(y - height // 2)),
+            max(1, int(width)),
+            max(1, int(height)),
+        )
+
     def _activate_appex_from_taskbar(self, *, timeout: float = 2.0) -> bool:
         return self._click_screen_template(
             WECHAT_APPEX_LOGO_TEMPLATE,
@@ -3340,6 +3442,64 @@ class PywinautoWechatAutomation:
             if remaining <= 0:
                 break
             time.sleep(min(0.5, remaining))
+        return False
+
+    def _switch_to_latest_appex(
+        self,
+        *,
+        before_handles: set[int] | None,
+        timeout: float,
+    ) -> bool:
+        before_handles = before_handles or set()
+        manager = self._get_window_manager(create=False)
+        if manager is not None:
+            new_appex = manager.latest_new_appex(
+                before_handles,
+                timeout=min(max(0.1, timeout), 5.0),
+            )
+            if new_appex is not None:
+                self.window = manager.normalize(new_appex, app_ex=True)
+                manager.normalize_all(active_window=self.window)
+                return True
+
+        desktop = self._get_desktop(create=False)
+        deadline = time.time() + max(0.0, timeout)
+        fallback: Any | None = None
+        while desktop is not None and time.time() < deadline:
+            for window in self._iter_wechat_windows(desktop):
+                if self._window_process_name(window) != "wechatappex.exe":
+                    continue
+                handle = self._window_handle(window)
+                if handle not in before_handles:
+                    self.window = (
+                        manager.normalize(window, app_ex=True)
+                        if manager is not None
+                        else window
+                    )
+                    if manager is not None:
+                        manager.normalize_all(active_window=self.window)
+                    else:
+                        try:
+                            self.window.set_focus()
+                        except Exception:
+                            pass
+                    return True
+                fallback = fallback or window
+            time.sleep(0.25)
+
+        if fallback is not None:
+            self.window = (
+                manager.normalize(fallback, app_ex=True)
+                if manager is not None
+                else fallback
+            )
+            if manager is not None:
+                manager.normalize_all(active_window=self.window)
+            return True
+
+        if self.window is not None and self._window_process_name(self.window) == "wechatappex.exe":
+            self._normalize_current_window()
+            return True
         return False
 
     def _current_window_region(self) -> tuple[int, int, int, int] | None:
