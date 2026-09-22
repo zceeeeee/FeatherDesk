@@ -186,8 +186,18 @@ def config_api():
                 _env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
             except Exception as e:
                 print("Failed to persist key to .env:", e)
-            return jsonify({"success": True, "message": "API Key 已成功配置并保存"})
-        return jsonify({"error": "Key 不能为空"}), 400
+            masked = new_key[:12] + "..." + new_key[-8:] if len(new_key) > 20 else "***"
+            return jsonify({"success": True, "message": "API Key 已成功配置并保存", "configured": True, "masked_key": masked})
+        else:
+            os.environ.pop("TYPESAFE_API_KEY", None)
+            try:
+                if _env_path.is_file():
+                    lines = _env_path.read_text(encoding="utf-8").splitlines()
+                    new_lines = [l for l in lines if not l.startswith("TYPESAFE_API_KEY=")]
+                    _env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            except Exception as e:
+                print("Failed to remove key from .env:", e)
+            return jsonify({"success": True, "message": "已清除 API Key，系统已切换至本地启发式模拟模式", "configured": False, "masked_key": ""})
     else:
         api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
         masked = api_key[:12] + "..." + api_key[-8:] if len(api_key) > 20 else ("***" if api_key else "")
@@ -529,14 +539,14 @@ HTML_TEMPLATE = r"""
 
     <!-- Mode Badge & Quick Status -->
     <div class="flex items-center gap-2.5 text-xs">
-      <div id="badge-api" class="px-3 py-1 rounded-full border border-slate-700 bg-slate-800 text-slate-400 flex items-center gap-1.5 cursor-pointer" onclick="configureApiKey()" title="点击查看或修改 API Key">
+      <div id="badge-api" class="px-3 py-1 rounded-full border border-slate-700 bg-slate-800 text-slate-400 flex items-center gap-1.5 cursor-pointer" onclick="openApiKeyModal()" title="点击查看或修改 API Key">
         <span class="w-2 h-2 rounded-full bg-slate-500" id="badge-api-dot"></span>
         <span id="badge-api-text">检查中...</span>
       </div>
-      <button onclick="configureApiKey()" class="px-3 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition flex items-center gap-1">
+      <button onclick="openApiKeyModal()" class="px-3 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition flex items-center gap-1 cursor-pointer">
         <span>🔑 配置 Key</span>
       </button>
-      <button onclick="resetSession()" class="px-3 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition">
+      <button onclick="resetSession()" class="px-3 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition cursor-pointer">
         重置会话
       </button>
     </div>
@@ -579,6 +589,29 @@ HTML_TEMPLATE = r"""
 
       <!-- Left Column: Inputs, Actions & Decision Card (5 Cols) -->
       <div class="lg:col-span-5 space-y-6">
+
+        <!-- Dedicated API Key Configuration Card -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-sm shadow-inner">
+                🔑
+              </div>
+              <div>
+                <h3 class="text-xs font-bold text-white uppercase tracking-wider">TypeSafe Jev API Key</h3>
+                <div class="text-[11px] text-slate-400 mt-0.5" id="card-api-status-desc">正在检测密钥状态...</div>
+              </div>
+            </div>
+            <button onclick="openApiKeyModal()" class="px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/30 text-xs font-medium transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer">
+              <span>⚙️ 配置 / 更换 Key</span>
+            </button>
+          </div>
+          <!-- Quick Inline Preview -->
+          <div class="text-xs font-mono px-3 py-2 rounded-lg bg-slate-950 border border-slate-800/80 flex items-center justify-between">
+            <span class="text-slate-400">当前密钥：</span>
+            <span id="card-api-key-val" class="text-slate-300">检测中...</span>
+          </div>
+        </div>
 
         <!-- Task & URL Input Panel -->
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
@@ -826,38 +859,116 @@ HTML_TEMPLATE = r"""
         const badge = document.getElementById("badge-api");
         const dot = document.getElementById("badge-api-dot");
         const text = document.getElementById("badge-api-text");
+        
+        const cardDesc = document.getElementById("card-api-status-desc");
+        const cardVal = document.getElementById("card-api-key-val");
+
         if (data.has_api_key) {
           badge.className = "px-3 py-1 rounded-full border border-emerald-500/40 bg-emerald-950/30 text-emerald-400 flex items-center gap-1.5 cursor-pointer";
           if (dot) dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
           text.textContent = `云端 Jev (${data.masked_key || '已连接'})`;
+
+          if (cardDesc) cardDesc.innerHTML = `<span class="text-emerald-400 font-medium">● 云端 Jev-1.13.0 模型已就绪</span>`;
+          if (cardVal) cardVal.innerHTML = `<span class="text-emerald-400 font-mono">${data.masked_key}</span>`;
         } else {
           badge.className = "px-3 py-1 rounded-full border border-amber-500/40 bg-amber-950/30 text-amber-400 flex items-center gap-1.5 cursor-pointer";
           if (dot) dot.className = "w-2 h-2 rounded-full bg-amber-400";
           text.textContent = "本地启发式模拟模式 (未设 KEY)";
+
+          if (cardDesc) cardDesc.innerHTML = `<span class="text-amber-400 font-medium">● 本地启发式回退模式 (未配 Key)</span>`;
+          if (cardVal) cardVal.innerHTML = `<span class="text-slate-500 font-mono">未配置 (可点击右上角配置)</span>`;
         }
       } catch (err) {
         console.error("Status check failed:", err);
       }
     }
 
-    async function configureApiKey() {
-      const current = await (await fetch("/api/config")).json();
-      const currentHint = current.configured ? `当前已配置: ${current.masked_key}` : "当前未配置";
-      const key = prompt(`请输入 TypeSafe Jev API Key (${currentHint}):`, "");
-      if (key && key.trim()) {
+    async function openApiKeyModal() {
+      try {
+        const res = await fetch("/api/config");
+        const data = await res.json();
+        const statusEl = document.getElementById("modal-current-status");
+        if (data.configured) {
+          statusEl.innerHTML = `<span class="text-emerald-400 font-mono">已配置 (${data.masked_key})</span>`;
+        } else {
+          statusEl.innerHTML = `<span class="text-amber-400 font-mono">未配置 (启发式回退模式)</span>`;
+        }
+      } catch (e) {
+        console.error("Failed to get config:", e);
+      }
+      const input = document.getElementById("modal-input-apikey");
+      input.value = "";
+      input.type = "password";
+      document.getElementById("btn-toggle-vis").textContent = "👁️";
+      document.getElementById("modal-apikey").classList.remove("hidden");
+      setTimeout(() => input.focus(), 50);
+    }
+
+    function closeApiKeyModal() {
+      document.getElementById("modal-apikey").classList.add("hidden");
+    }
+
+    function toggleApiKeyVisibility() {
+      const input = document.getElementById("modal-input-apikey");
+      const icon = document.getElementById("btn-toggle-vis");
+      if (input.type === "password") {
+        input.type = "text";
+        icon.textContent = "🙈";
+      } else {
+        input.type = "password";
+        icon.textContent = "👁️";
+      }
+    }
+
+    async function saveApiKeyFromModal() {
+      const input = document.getElementById("modal-input-apikey");
+      const key = input.value.trim();
+      const btn = document.getElementById("btn-save-apikey");
+      btn.disabled = true;
+      btn.innerHTML = `<span>⏳ 保存中...</span>`;
+
+      try {
         const res = await fetch("/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_key: key.trim() })
+          body: JSON.stringify({ api_key: key })
         });
         const data = await res.json();
         if (data.success) {
           alert("✓ " + data.message);
+          closeApiKeyModal();
           checkStatus();
         } else {
-          alert("错误: " + data.error);
+          alert("保存失败: " + (data.error || "未知错误"));
+        }
+      } catch (err) {
+        alert("网络请求异常: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>💾 保存并生效</span>`;
+      }
+    }
+
+    async function clearApiKeyFromModal() {
+      if (confirm("确定要清除当前配置的 API Key 吗？系统将切换为本地启发式回退模式。")) {
+        try {
+          const res = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: "" })
+          });
+          const data = await res.json();
+          alert("✓ " + (data.message || "已清除"));
+          closeApiKeyModal();
+          checkStatus();
+        } catch (err) {
+          alert("清除失败: " + err.message);
         }
       }
+    }
+
+    function configureApiKey() {
+      openApiKeyModal();
     }
 
     async function _fetchJson(url, options) {
@@ -1081,12 +1192,66 @@ HTML_TEMPLATE = r"""
       }
     }
 
+    // Close modal on Escape
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeApiKeyModal();
+      }
+    });
+
     // Initialize on load
     window.addEventListener("DOMContentLoaded", () => {
       checkStatus();
       refreshHistory();
     });
   </script>
+
+  <!-- API Key Modal Dialog -->
+  <div id="modal-apikey" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span>🔑</span> 配置 TypeSafe Jev API Key
+        </h3>
+        <button onclick="closeApiKeyModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition text-lg leading-none cursor-pointer">&times;</button>
+      </div>
+
+      <div class="text-xs text-slate-300 leading-relaxed space-y-2">
+        <p>配置 API Key 后，系统将直接调用云端 <span class="text-cyan-400 font-mono font-semibold">jev-1.13.0</span> 大模型进行智能元素决策与规划。配置会自动保存在本地 <code class="text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">.env</code> 中。</p>
+        <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[11px] text-slate-400 flex items-center justify-between">
+          <span>当前状态：</span>
+          <span id="modal-current-status" class="font-mono text-slate-300 font-semibold">检查中...</span>
+        </div>
+      </div>
+
+      <div class="space-y-1.5">
+        <label class="block text-xs font-medium text-slate-300">请输入 API Key：</label>
+        <div class="relative">
+          <input type="password" id="modal-input-apikey" placeholder="apikey_xxxxxxxx..." 
+            class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2.5 pr-10 text-sm text-white font-mono focus:outline-none focus:border-cyan-500"
+            onkeydown="if(event.key==='Enter') saveApiKeyFromModal()">
+          <button type="button" onclick="toggleApiKeyVisibility()" class="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200 text-sm p-0.5 cursor-pointer" title="切换显示/隐藏">
+            <span id="btn-toggle-vis">👁️</span>
+          </button>
+        </div>
+        <p class="text-[11px] text-slate-500">提示：留空并保存将清除当前配置的 Key，回退至本地启发式模式。</p>
+      </div>
+
+      <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+        <button type="button" onclick="clearApiKeyFromModal()" class="text-xs text-rose-400 hover:text-rose-300 transition underline cursor-pointer">
+          清除现有 Key
+        </button>
+        <div class="flex items-center gap-2">
+          <button onclick="closeApiKeyModal()" class="px-4 py-2 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition cursor-pointer">
+            取消
+          </button>
+          <button id="btn-save-apikey" onclick="saveApiKeyFromModal()" class="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs transition flex items-center gap-1.5 shadow-lg shadow-cyan-600/20 cursor-pointer">
+            <span>💾 保存并生效</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
 """
