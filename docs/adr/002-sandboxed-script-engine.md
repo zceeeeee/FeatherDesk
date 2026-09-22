@@ -282,7 +282,22 @@ graph TD
 2. 设置较长的超时时间（120 秒）
 3. 启用详细日志
 
+## 实现落地说明与跨平台考量 (Implementation Reality & Cross-Platform Notes)
+
+在实际工程落地与跨平台支持中，沙箱引擎作了如下调整：
+
+1. **白名单内置命名空间隔离 (`_SAFE_BUILTINS`)**：
+   - 生产代码（`src/core/script_engine.py`）采用直接清空危险内置函数、仅保留安全基础类型与辅助函数的白名单机制（明确排除了 `__import__`, `open`, `eval`, `exec`）。脚本尝试执行 `import` 或文件读写时，在 Python 运行时会直接抛出 `ImportError: __import__ not found`。
+2. **跨平台超时与取消机制**：
+   - 原设计的 `signal.SIGALRM` 为 UNIX 独有，在 Windows 系统下不可用。为保证跨平台兼容性，执行超时目前依托于：
+     - 底层 Playwright 原语的超时控制（默认导航/查找超时 10s~30s）；
+     - `AgentLoop` 的最大执行步数硬限制（默认 20 步）；
+     - 在关键动作前后的协同取消信号检查（`_raise_if_cancelled()`）。
+3. **AST 预检查的定位**：
+   - 原设计的 AST 静态遍历可作为后续高安全级别环境下的可选增强插件。
+
 ## 相关决策
 
 - [ADR-001: 三层架构设计](001-three-layer-architecture.md)
 - [ADR-003: Agent 循环设计](003-agent-loop-design.md)
+

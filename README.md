@@ -18,18 +18,18 @@
 ## 四层架构
 
 ```
-Layer 0: Panel    (用户交互)     ← panel/: inject.js + panel_manager.py
-Layer 3: Domains  (站点经验)     ← domains/*.yaml + workspace/knowledge/
-Layer 2: Skills   (肌肉记忆)     ← controls.py + skill_library/
-Layer 1: Helpers  (原语)          ← actions.py: goto/click/fill/screenshot
+Layer 0: Interaction (用户交互)     ← panel_manager.py + core/user_interaction.py
+Layer 3: Domains     (站点经验)     ← domains/*.yaml + workspace/knowledge/
+Layer 2: Skills      (控件与业务)   ← controls.py + skill_library/
+Layer 1: Helpers     (原语与桌面)   ← actions.py + wechat_client.py + wps_writer.py
 ```
 
 | 层级 | 职责 | 进化方式 |
 |------|------|---------|
-| **Layer 0** | 浏览器内交互面板 | Shadow DOM 注入，脚本/MCP 双向控制 |
-| **Layer 1** | 原子操作 | 不变 |
-| **Layer 2** | 控件函数 | 扩展新函数 |
-| **Layer 3** | 站点经验 | 选择器自愈 + 知识积累 |
+| **Layer 0** | 用户交互中介门面 | 进程内中介代理，脚本/MCP/桌面端双向解耦通信 |
+| **Layer 1** | 原子操作与桌面客户端 | 浏览器操作原语 + Windows 微信/WPS 客户端驱动 |
+| **Layer 2** | 控件函数与技能组装 | 扩展新控件函数与业务技能 |
+| **Layer 3** | 站点领域经验 | 选择器自愈回写 + 平台专用提取器 (BOSS/淘宝) |
 
 ## 当前能力
 
@@ -37,36 +37,18 @@ Layer 1: Helpers  (原语)          ← actions.py: goto/click/fill/screenshot
 |------|------|------|
 | **简单任务**（搜索、导航、截图） | ✅ 可用 | 直接跑通 |
 | **中等任务**（登录、填表、翻页） | ⚠️ 有限 | 有模板，需要适配站点 |
-| **复杂任务**（多步骤、跨页面） | ⚠️ 有限 | Agent 循环能跑，推理能力有限 |
+| **复杂任务**（多步骤、跨页面） | ⚠️ 有限 | Agent 循环能跑，支持 ARIA 快照与多模态视觉探索 |
 
-**已适配站点**：百度、搜狗、当当、B站、头条、CSDN、百科、天气、微博、掘金、IT之家、菜鸟教程、开源中国
+**已适配站点**：百度、搜狗、当当、B站、头条、CSDN、百科、天气、微博、掘金、IT之家、菜鸟教程、开源中国、BOSS直聘、淘宝等
 
-## 交互面板（Layer 0）
+## 交互中介与面板（Layer 0）
 
-浏览器启动后自动注入一个交互面板，用户可以通过输入框、按钮与自动化程序双向通信。
-
-```
-┌─────────────────────────┐
-│ 🤖  Agentic Panel   [—] │  ← 默认最小化，点击展开
-├─────────────────────────┤
-│ 输入                    │
-│ [________________] [提交]│  ← 用户输入数据，程序通过 panel_read() 读取
-│                         │
-│ 日志                    │
-│ ┌─────────────────────┐ │
-│ │ 正在搜索...          │ │  ← 程序通过 panel_log() 写入
-│ │ 找到 10 个结果       │ │
-│ └─────────────────────┘ │
-│                         │
-│      Agentic Playwright │
-└─────────────────────────┘
-```
+系统通过独立的交互中介（`UserInteractionBroker`）与统一门面（`PanelManager`），实现自动化程序与用户的双向非侵入式通信。
 
 **技术特性**：
-- **Shadow DOM 隔离**：面板样式不受宿主页面影响
-- **键盘事件隔离**：页面 JS 无法拦截面板输入
-- **自动存活保护**：被页面移除后自动重建
-- **跨页面持久**：通过 `addInitScript` 注入，导航/刷新/新标签页自动生效
+- **非侵入式架构**：交互请求完全通过进程外桌面 UI（如 FeatherDesk）与 MCP 客户端呈现，彻底杜绝注入脚本对宿主页面 DOM 的污染与反爬风险。
+- **动态阻塞提问**：脚本可通过 `panel_prompt()` 挂起并等待用户输入表单或确认。
+- **登录状态守卫**：结合 `login_guard`，在检测到扫码或滑块验证码时自动提示人工接管并保存凭据。
 
 **三种操控方式**：
 
@@ -356,30 +338,31 @@ auth_delete("baidu") # 删除
 agentic-playwright-mcp/
 ├── src/
 │   ├── server.py                  # MCP 入口（18 个工具）
-│   ├── cli.py                     # CLI (serve/run/doctor/gui)
+│   ├── cli.py                     # CLI (serve/run/doctor/setup/gui/desktop)
 │   ├── sdk.py                     # Python SDK
 │   ├── core/
-│   │   ├── agent_loop.py          # Agent 循环引擎
+│   │   ├── agent_loop.py          # Agent 循环引擎 (6 状态有限状态机)
 │   │   ├── skill_router.py        # 技能路由器（关键词快筛 + LLM 精排）
+│   │   ├── explore/               # 自主探索引擎 (ARIA 快照 + 视觉多级回退)
 │   │   ├── llm_client.py          # LLM 客户端（chat / chat_json 双接口）
 │   │   ├── auth_manager.py        # Cookie 持久化管理
-│   │   ├── script_engine.py       # 脚本执行引擎（注入面板函数）
+│   │   ├── script_engine.py       # 脚本执行沙箱 (安全白名单)
 │   │   ├── script_generator.py    # 任务意图解析（规则）
 │   │   ├── intent_parser.py       # LLM 意图解析（兜底）
-│   │   ├── experience.py          # 经验进化系统
-│   │   ├── browser_manager.py     # 双引擎浏览器管理（自动注入面板）
+│   │   ├── browser_manager.py     # 双引擎浏览器管理 (Playwright/CloakBrowser)
+│   │   ├── user_interaction.py    # 进程内交互中介 (UserInteractionBroker)
 │   │   ├── event_bus.py           # 事件钩子系统
-│   │   ├── recovery.py            # 错误恢复
-│   │   └── vision.py              # 视觉模块
-│   ├── panel/                     # Layer 0: 交互面板
-│   │   ├── inject.js              # Shadow DOM 面板（注入浏览器）
-│   │   └── panel_manager.py       # 面板管理器（Python 端）
+│   │   └── vision.py / ocr.py     # 多模态视觉与本地 WinRT OCR
+│   ├── desktop/                   # 桌面后端服务 (FastAPI + SQLite)
+│   ├── panel/                     # Layer 0: 交互门面
+│   │   └── panel_manager.py       # 门面代理（对接本地交互中介）
 │   ├── gui/app.py                 # Web GUI
-│   ├── layer_1/actions.py         # 原子操作
-│   ├── layer_2/controls.py        # 高级控件函数
-│   ├── layer_3/                   # 域配置 + 自愈
-│   └── skill_library/             # 标准脚本库
-├── domains/                       # 站点选择器配置（19 个）
+│   ├── layer_1/                   # Layer 1: 原子操作与桌面客户端 (wechat/wps)
+│   ├── layer_2/                   # Layer 2: 控件层 (controls.py)
+│   ├── layer_3/                   # Layer 3: 域配置 + 自愈写回 + 专用提取器
+│   └── skill_library/             # 生产技能库 (40 个 Python 技能)
+├── desktop/                       # Electron 桌面端 (FeatherDesk, React+TS)
+├── domains/                       # 站点选择器配置（20+ 个 YAML）
 ├── workspace/                     # 经验存储
 ├── tests/                         # 685 个测试
 ├── docs/                          # MkDocs 文档

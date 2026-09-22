@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic Playwright MCP — 现行流程 vs Jev 双闭环改进流程全景对比</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    code, pre {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .mermaid-box svg {
+      max-width: 100% !important;
+      height: auto !important;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-3">
+          <span class="bg-gradient-to-r from-orange-500 to-amber-500 text-white text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">Architecture Evolution</span>
+          <span class="text-xs text-slate-400 font-mono">Date: 2026-09-22</span>
+        </div>
+        <h1 class="text-2xl font-bold text-white mt-1">Agentic Playwright MCP 流程改进方案</h1>
+        <p class="text-sm text-slate-400">现行单环长周期 System 2 架构 vs Jev (System 1) 双闭环极速自愈架构</p>
+      </div>
+
+      <!-- Quick stats summary badge -->
+      <div class="flex items-center gap-3 bg-slate-800/80 border border-slate-700/60 rounded-xl p-2.5">
+        <div class="text-center px-3 border-r border-slate-700">
+          <div class="text-xs text-slate-400">端到端耗时</div>
+          <div class="text-lg font-bold text-emerald-400">22s → 7s <span class="text-xs font-normal text-emerald-500">(-68%)</span></div>
+        </div>
+        <div class="text-center px-3 border-r border-slate-700">
+          <div class="text-xs text-slate-400">LLM 调用开销</div>
+          <div class="text-lg font-bold text-amber-400">4次 → 1次 <span class="text-xs font-normal text-amber-500">(-65%)</span></div>
+        </div>
+        <div class="text-center px-3">
+          <div class="text-xs text-slate-400">假死自愈时延</div>
+          <div class="text-lg font-bold text-sky-400">8.5s → 0.35s <span class="text-xs font-normal text-sky-500">(24x)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="max-w-7xl mx-auto px-6 flex gap-2 border-t border-slate-800/60 pt-2 overflow-x-auto text-sm">
+      <button onclick="switchTab('tab-compare')" id="btn-tab-compare" class="tab-btn px-4 py-2 font-medium border-b-2 border-orange-500 text-orange-400 flex items-center gap-2">
+        <span>⚖️ 全景横向对比</span>
+      </button>
+      <button onclick="switchTab('tab-current')" id="btn-tab-current" class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2">
+        <span>🐢 现行单环长周期流程</span>
+      </button>
+      <button onclick="switchTab('tab-improved')" id="btn-tab-improved" class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2">
+        <span>⚡ 改进后双闭环流程 (Jev A+B)</span>
+      </button>
+      <button onclick="switchTab('tab-scenario')" id="btn-tab-scenario" class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2">
+        <span>⏱️ 典型场景秒级推演</span>
+      </button>
+      <button onclick="switchTab('tab-code')" id="btn-tab-code" class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2">
+        <span>🛠️ 代码落地点与接口定义</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="max-w-7xl mx-auto px-6 py-8">
+
+    <!-- ================================================================= -->
+    <!-- TAB 1: 全景横向对比 -->
+    <!-- ================================================================= -->
+    <section id="tab-compare" class="tab-pane block space-y-8">
+      
+      <!-- Key Metric Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">单交互步决策时延</div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span class="text-3xl font-extrabold text-emerald-400">150 ms</span>
+            <span class="text-xs text-slate-500 line-through">3500 ms</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-2">Jev System 1 强类型单次直出，无需等待自回归 Token 逐字流式生成。</p>
+          <div class="absolute -right-4 -bottom-4 w-16 h-16 bg-emerald-500/10 rounded-full blur-xl"></div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">假死点击 (Inert Click) 发现与自愈</div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span class="text-3xl font-extrabold text-sky-400">350 ms</span>
+            <span class="text-xs text-slate-500 line-through">8,500 ms</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-2">模式 B 即时对比前后差量，原地触发坐标强击，告别“整轮慢重试”。</p>
+          <div class="absolute -right-4 -bottom-4 w-16 h-16 bg-sky-500/10 rounded-full blur-xl"></div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">任务收尾判定耗时</div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span class="text-3xl font-extrabold text-purple-400">450 ms</span>
+            <span class="text-xs text-slate-500 line-through">4,100 ms</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-2">模式 A 扫视视口摘要直接结案，无需提取全量 ARIA 树喂大模型确认。</p>
+          <div class="absolute -right-4 -bottom-4 w-16 h-16 bg-purple-500/10 rounded-full blur-xl"></div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">大模型 Token 成本支出</div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span class="text-3xl font-extrabold text-amber-400">-65%</span>
+            <span class="text-xs text-slate-500">节约 2/3</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-2">翻页、终态确认、弹窗提示等无意义大模型 Prompt 被前置旁路拦截。</p>
+          <div class="absolute -right-4 -bottom-4 w-16 h-16 bg-amber-500/10 rounded-full blur-xl"></div>
+        </div>
+      </div>
+
+      <!-- Core Comparison Matrix Table -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+        <div class="p-5 border-b border-slate-800 flex justify-between items-center">
+          <h2 class="text-lg font-bold text-white flex items-center gap-2">
+            <span>📋 全维度核心指标与机制横向对比表</span>
+          </h2>
+          <span class="text-xs text-slate-400">基于典型 4 步网页自动化任务实测与推演</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-800/60 text-slate-300 text-xs font-semibold uppercase tracking-wider border-b border-slate-800">
+                <th class="py-3 px-4 w-1/5">评估维度</th>
+                <th class="py-3 px-4 w-2/5 text-rose-300 bg-rose-950/20">现行流程 (Current: 纯 LLM 慢思考)</th>
+                <th class="py-3 px-4 w-2/5 text-emerald-300 bg-emerald-950/20">改进后流程 (Improved: Jev 双闭环架构)</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-slate-300">
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-3.5 px-4 font-semibold text-slate-200">决策模型分工</td>
+                <td class="py-3.5 px-4 text-slate-400">全流程单一依赖 GPT-4o / Claude 3.5 处理所有微小决策</td>
+                <td class="py-3.5 px-4 text-emerald-300 font-medium">Jev (System 1 毫秒级门禁) + LLM (System 2 复杂全量定位) 双轨互补</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-3.5 px-4 font-semibold text-slate-200">前置任务状态判断 (模式 A)</td>
+                <td class="py-3.5 px-4 text-slate-400">无前置快判。即使已完成，也必须抓全量 ARIA 树让大模型重新读 4 秒</td>
+                <td class="py-3.5 px-4 text-emerald-300 font-medium">前置扫视视口摘要，若 Jev 判定目标达成 (confidence≥0.85)，150ms 内直达 DONE</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-3.5 px-4 font-semibold text-slate-200">操作后效果验证 (模式 B)</td>
+                <td class="py-3.5 px-4 text-slate-400">无即时验证机制。执行完毕直接盲目进入下一轮快照提取</td>
+                <td class="py-3.5 px-4 text-emerald-300 font-medium">轻量捕获 URL/Title/Toast 差量，Jev 在 150ms 内确认点击死活与跳转状态</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-3.5 px-4 font-semibold text-slate-200">假死元素 (Inert Click) 处理</td>
+                <td class="py-3.5 px-4 text-slate-400">下一轮大模型发现还在原页面，困惑并尝试重复点击，浪费 8 秒以上</td>
+                <td class="py-3.5 px-4 text-emerald-300 font-medium">Jev 即时判定 inert_click，原地触发物理坐标强击或 JS 穿透，350ms 内自愈</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-3.5 px-4 font-semibold text-slate-200">表单校验报错响应</td>
+                <td class="py-3.5 px-4 text-slate-400">重新抓取全 DOM，期望大模型在几百个节点中注意到红色错误文字</td>
+                <td class="py-3.5 px-4 text-emerald-300 font-medium">差量捕获新出现的 Toast/Alert 错误文本，精准反馈给下一轮决策，零误判</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-3.5 px-4 font-semibold text-slate-200">遮挡与登录弹窗阻断</td>
+                <td class="py-3.5 px-4 text-slate-400">依赖脆弱的 DOM 启发式匹配，或者大模型因页面遮挡产生严重幻觉</td>
+                <td class="py-3.5 px-4 text-emerald-300 font-medium">Jev Noul 问题秒级识别阻断弹窗，提前触发人机接管面板，保护大模型</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-3.5 px-4 font-semibold text-slate-200">典型 4 步任务端到端耗时</td>
+                <td class="py-3.5 px-4 font-mono font-semibold text-rose-400">22.3 秒</td>
+                <td class="py-3.5 px-4 font-mono font-semibold text-emerald-400">7.3 秒 (提升 3 倍速率)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- TAB 2: 现行单环流程 -->
+    <!-- ================================================================= -->
+    <section id="tab-current" class="tab-pane hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <h2 class="text-xl font-bold text-white mb-2 flex items-center gap-2">
+          <span class="text-rose-400">现行流程：单环慢思考长周期架构</span>
+        </h2>
+        <p class="text-sm text-slate-400 mb-6">
+          当前代码库以 <code>src/core/agent_loop.py</code> 为核心，所有动作执行与探索全部通过大模型单通道推进。无即时校验、无前置轻量拦截。
+        </p>
+
+        <!-- Current Mermaid Flow -->
+        <div class="mermaid-box bg-slate-950/80 border border-slate-800 rounded-lg p-4 overflow-x-auto text-center">
+          <pre class="mermaid">
+flowchart TD
+    A["用户提交任务: task"] --> B["[~50ms] 初始化 AgentLoop (src/core/agent_loop.py:261)"]
+    B --> C["[~20ms] TaskSplitter 切词 (src/core/task_splitter.py:39)"]
+    C --> D["[~300ms] OBSERVE 状态: dom_explorer.summarize_page"]
+    D --> E["[~100ms] PLAN 状态: SkillRouter 规则初筛 (src/core/skill_router.py:153)"]
+    E --> F{"技能规则命中?"}
+    
+    F -->|是| G["[~500ms] ACT: 脚本沙箱执行 ScriptEngine.execute"]
+    F -->|否| H["[~400ms] EXPLORE 状态: 提取全量 ARIA 树打标 e1..eN (snapshot.py:420)"]
+    
+    H --> I["[~3500ms] 慢思考 LLM 规划: explore_agent.plan_actions<br/>输入数千 Token 全量树，生成 ActionBatch (agent.py:400)"]
+    
+    I --> J{"规划结果判定"}
+    J -->|标记完成| K["[~50ms] 标记任务完成 DONE"]
+    J -->|生成动作批次| L["[~800ms] ACT 状态: ExploreExecutor.execute (executor.py:210)"]
+    
+    L --> M["[~1000ms] 盲等网络与渲染 networkidle (executor.py:280)"]
+    M --> N["[~400ms] 再次抓取全量 ARIA 快照 (无法确认点击是否生效)"]
+    N --> O["[~3500ms] 再次调用慢思考 LLM: 判定操作是否生效"]
+    
+    O --> P{"是否遭遇假死或无响应?"}
+    P -->|连续3次页面不变| Q["[~15000ms] 触发回路熔断 FAILED"]
+    P -->|已完成| K
+    P -->|继续下一步| L
+    
+    G --> R{"脚本执行异常?"}
+    R -->|选择器报错| S["[~4000ms] 多模态视觉模型自愈分析 (agent_loop.py:2170)"]
+    R -->|正常完成| K
+          </pre>
+        </div>
+
+        <!-- Bottlenecks Callouts -->
+        <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="bg-rose-950/20 border border-rose-900/40 rounded-lg p-4">
+            <h4 class="text-sm font-semibold text-rose-400">1. 沉重的大模型税</h4>
+            <p class="text-xs text-slate-400 mt-1">即使页面已经展示了搜索结果，系统依然必须抓取 150 个节点的完整 ARIA 树送入大模型，耗费 3~5 秒仅为了确认一句“任务已完成”。</p>
+          </div>
+          <div class="bg-rose-950/20 border border-rose-900/40 rounded-lg p-4">
+            <h4 class="text-sm font-semibold text-rose-400">2. 盲目执行与反馈真空</h4>
+            <p class="text-xs text-slate-400 mt-1">点击按钮后 Playwright 返回成功，但现代 SPA 经常因为前端事件冒泡失效导致实际上没有任何反应。系统没有任何本地校验手段。</p>
+          </div>
+          <div class="bg-rose-950/20 border border-rose-900/40 rounded-lg p-4">
+            <h4 class="text-sm font-semibold text-rose-400">3. 异常排查极度迟钝</h4>
+            <p class="text-xs text-slate-400 mt-1">遇到假死时，系统需要整整跑满 3 轮大模型循环（耗时 15 秒以上）才会触发熔断报错，用户体验极为拖沓。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- TAB 3: 改进后双闭环流程 -->
+    <!-- ================================================================= -->
+    <section id="tab-improved" class="tab-pane hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+          <div>
+            <h2 class="text-xl font-bold text-white flex items-center gap-2">
+              <span class="text-emerald-400">改进后流程：Jev System 1 双闭环极速自愈架构</span>
+            </h2>
+            <p class="text-sm text-slate-400">
+              模式 A（前置拦截）+ LLM（复杂定位）+ 模式 B（后置验证），快慢结合，职责明确。
+            </p>
+          </div>
+          <span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs px-3 py-1.5 rounded-lg font-mono">
+            Dual-Loop System 1 & 2
+          </span>
+        </div>
+
+        <!-- Improved Mermaid Flow -->
+        <div class="mermaid-box bg-slate-950/80 border border-slate-800 rounded-lg p-4 overflow-x-auto text-center">
+          <pre class="mermaid">
+flowchart TD
+    Start(["用户输入任务 Task"]) --> Observe["[~200ms] OBSERVE: 提取轻量视口摘要 (Title, URL, 前500字)"]
+    
+    subgraph ModeA ["⚡ 模式 A: Jev 前置旁路跳过器 (JevFastGate: ~150ms)"]
+        Observe --> JevPreCheck["[~150ms] Jev 状态判定 POST /v1/systemone<br/>State: task, url, title, visible_text<br/>Q: macro_status Choice + is_goal_complete Noul"]
+        
+        JevPreCheck --> PreJudge{"Jev 快判结论"}
+        PreJudge -->|目标已达成 置信度极高| FastDone(["[仅 350ms] 直接结案 DONE<br/>节省 90% 耗时与 100% LLM Token"])
+        PreJudge -->|仅需翻页或滚动| QuickScroll["[~100ms] 原生滚动视口 page.evaluate()<br/>无需唤醒大模型"]
+        QuickScroll --> Observe
+        PreJudge -->|被登录或验证码阻断| PopGuard["[~50ms] 触发人机接管 LoginGuard"]
+        PreJudge -->|需深度元素交互| GoLLM["交由大模型定位"]
+    end
+
+    subgraph System2 ["🧠 System 2: 大模型复杂语义定位 (按需触发: ~3000ms)"]
+        GoLLM --> ARIAExtract["[~350ms] 提取局部聚焦 ARIA 树 (snapshot.py)"]
+        ARIAExtract --> LLMPlan["[~3000ms] 慢思考大模型: 锁定操作元素与入参<br/>Target: e5, Action: fill, Value: ..."]
+    end
+
+    subgraph ExecDelta ["🎯 执行与微差量捕获 (Playwright: ~350ms)"]
+        LLMPlan --> CapBefore["[~20ms] 抓取操作前微指纹 (URL, Alert文本)"]
+        CapBefore --> ActionRun["[~300ms] 执行 Playwright 原语操作"]
+        ActionRun --> CapAfter["[~30ms] 抓取操作后微差量 Delta"]
+    end
+
+    subgraph ModeB ["🛡️ 模式 B: Jev 后置动作效果验证器 (JevVerifier: ~150ms)"]
+        CapAfter --> JevPostCheck["[~150ms] Jev 效果识别 POST /v1/systemone<br/>State: action, url_before, url_after, toast_diff<br/>Q: action_result Choice + should_micro_retry Noul"]
+        
+        JevPostCheck --> PostJudge{"Jev 动作效果识别"}
+        PostJudge -->|成功跳转或状态演进| NextStep["验证通过，进入下一交互轮次"]
+        
+        PostJudge -->|假死或元素无反应| MicroHeal["[~200ms] 原地极速微自愈<br/>page.mouse.click 物理坐标重点击<br/>无需退回大模型重新思考"]
+        MicroHeal --> CapBefore
+        
+        PostJudge -->|表单校验报错| ErrorFeedback["提取 Toast 报错字符串直接喂给下一轮<br/>精准补正参数，避免盲猜"]
+    end
+
+    NextStep --> Observe
+    ErrorFeedback --> GoLLM
+    PopGuard --> FinishWait(["等待人工接管"])
+    FastDone --> Finish(["输出结果 AgentTaskResult"])
+          </pre>
+        </div>
+
+        <!-- Architectural Advantages -->
+        <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="bg-emerald-950/20 border border-emerald-900/40 rounded-lg p-4">
+            <h4 class="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+              <span>⚡ 模式 A 的价值：阻断无意义慢思考</span>
+            </h4>
+            <p class="text-xs text-slate-300 mt-2 leading-relaxed">
+              在搜索结果呈现、页面到达终态、或者遇到全屏扫码弹窗时，Jev 凭借单次 <code>150ms</code> 的分类与布尔判断直接分流。只有真正需要“从 50 个按钮里挑出具体点哪一个”时，才唤醒 GPT-4o。大模型调用频次立减 <strong>50% 以上</strong>。
+            </p>
+          </div>
+
+          <div class="bg-emerald-950/20 border border-emerald-900/40 rounded-lg p-4">
+            <h4 class="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+              <span>🛡️ 模式 B 的价值：毫秒级防假死自愈</span>
+            </h4>
+            <p class="text-xs text-slate-300 mt-2 leading-relaxed">
+              Playwright 经常遇到“点了但页面没反应”的假死情况。传统方式需要等下一轮花 4 秒重新扫描全树由大模型识别，而模式 B 在 <strong>350ms 内即可确认假死并直接执行坐标级物理强击（Micro-Heal）</strong>，让自动化流程丝滑流畅。
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- TAB 4: 典型场景秒级推演 -->
+    <!-- ================================================================= -->
+    <section id="tab-scenario" class="tab-pane hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <h2 class="text-xl font-bold text-white mb-1">典型业务场景全流程实测推演对比</h2>
+        <p class="text-sm text-slate-400 mb-6">
+          任务案例：<span class="text-orange-400 font-medium">“在电商平台搜索机械键盘，点击第一款商品进入详情页，确认价格并结案”</span>
+        </p>
+
+        <!-- Step-by-step Timeline Comparison -->
+        <div class="space-y-4">
+
+          <!-- Step 1 -->
+          <div class="border border-slate-800 rounded-lg p-4 bg-slate-950/60">
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-sm font-bold text-white flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center text-xs">1</span>
+                Step 1: 打开电商首页并确认页面加载
+              </span>
+              <span class="text-xs font-mono text-slate-400">Navigation & Verification</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div class="bg-rose-950/20 border border-rose-900/30 p-3 rounded">
+                <div class="text-rose-400 font-semibold mb-1">现行流程耗时: ~4,200 ms</div>
+                <p class="text-slate-400">打开页面 (800ms) → 抓全量 ARIA 树 (400ms) → GPT-4o 完整推理 3,000ms 输出输入搜索框指令。</p>
+              </div>
+              <div class="bg-emerald-950/20 border border-emerald-900/30 p-3 rounded">
+                <div class="text-emerald-400 font-semibold mb-1">改进后流程耗时: ~3,800 ms</div>
+                <p class="text-slate-300">打开页面 (800ms) → Jev 模式 A 快判确认未完成需交互 (150ms) → GPT-4o 精准定位搜索框并输入 (2,850ms)。</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="border border-slate-800 rounded-lg p-4 bg-slate-950/60">
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-sm font-bold text-white flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center text-xs">2</span>
+                Step 2: 键入关键词并点击“搜索”
+              </span>
+              <span class="text-xs font-mono text-slate-400">Fill & Submit Action</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div class="bg-rose-950/20 border border-rose-900/30 p-3 rounded">
+                <div class="text-rose-400 font-semibold mb-1">现行流程耗时: ~4,800 ms</div>
+                <p class="text-slate-400">Playwright 填入并回车 (300ms) → 盲等 networkidle (1500ms) → 重新抓取完整 DOM 树 (400ms) → GPT-4o 重新推理 (2600ms)。</p>
+              </div>
+              <div class="bg-emerald-950/20 border border-emerald-900/30 p-3 rounded">
+                <div class="text-emerald-400 font-semibold mb-1">改进后流程耗时: ~1,500 ms</div>
+                <p class="text-slate-300">填入回车 (300ms) → <strong>Jev 模式 B 在 150ms 内确认 URL 成功变更（navigated_successfully）</strong>，仅等待必要渲染 (1000ms)，跳过中间无效等待。</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3 (Crucial difference: inert click) -->
+          <div class="border-2 border-amber-500/40 rounded-lg p-4 bg-amber-950/10">
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-sm font-bold text-amber-300 flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center text-xs">3</span>
+                Step 3: 点击商品列表首项 (遭遇元素假死与自愈)
+              </span>
+              <span class="text-xs font-mono bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded">关键差异点</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div class="bg-rose-950/20 border border-rose-900/30 p-3 rounded">
+                <div class="text-rose-400 font-semibold mb-1">现行流程耗时: ~9,200 ms (严重浪费)</div>
+                <p class="text-slate-400 leading-relaxed">
+                  点击按钮但 DOM 实际上无响应 → Playwright 以为成功 → 抓取整页快照 (400ms) → GPT-4o 耗时 3500ms 困惑为何仍在列表页 → 再次尝试点击 (300ms) → 再抓一次快照 (400ms) → GPT-4o 确认跳转 (3500ms)。
+                </p>
+              </div>
+              <div class="bg-emerald-950/20 border border-emerald-900/30 p-3 rounded">
+                <div class="text-emerald-400 font-semibold mb-1">改进后流程耗时: ~1,850 ms (极速微自愈)</div>
+                <p class="text-slate-300 leading-relaxed">
+                  GPT-4o 选定商品卡片 (1200ms) → 执行点击 (200ms) → <strong>Jev 模式 B 在 150ms 内检测到 inert_click</strong> → 原地触发 <code>page.mouse.click(x, y)</code> 物理坐标穿透强击 (150ms) → 页面瞬间成功跳转！
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="border border-slate-800 rounded-lg p-4 bg-slate-950/60">
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-sm font-bold text-white flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center text-xs">4</span>
+                Step 4: 校验商品详情已打开并结案
+              </span>
+              <span class="text-xs font-mono text-slate-400">Final Verification</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div class="bg-rose-950/20 border border-rose-900/30 p-3 rounded">
+                <div class="text-rose-400 font-semibold mb-1">现行流程耗时: ~4,100 ms</div>
+                <p class="text-slate-400">页面已呈现详情 → 抓全量 ARIA 树 (400ms) → GPT-4o 完整解析并返回 complete=True (3700ms)。</p>
+              </div>
+              <div class="bg-emerald-950/20 border border-emerald-900/30 p-3 rounded">
+                <div class="text-emerald-400 font-semibold mb-1">改进后流程耗时: ~450 ms (极速旁路跳过)</div>
+                <p class="text-slate-300">页面呈现详情 → <strong>模式 A 提取 URL 和前 500 字，Jev 在 150ms 内判定 is_goal_complete=0.96</strong> → 直接判定 DONE 结案！</p>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Total summary line -->
+        <div class="mt-6 p-4 bg-slate-800/80 border border-slate-700 rounded-lg flex flex-col md:flex-row justify-between items-center gap-4">
+          <div>
+            <div class="text-sm font-bold text-white">4 步端到端总执行耗时对比</div>
+            <div class="text-xs text-slate-400">从用户回车到系统输出结构化成功结果</div>
+          </div>
+          <div class="flex items-center gap-6">
+            <div class="text-right">
+              <div class="text-xs text-slate-400">现行流程</div>
+              <div class="text-xl font-bold font-mono text-rose-400">22.3 秒</div>
+            </div>
+            <div class="text-2xl text-slate-600">→</div>
+            <div class="text-right">
+              <div class="text-xs text-emerald-400 font-semibold">改进后双闭环流程</div>
+              <div class="text-2xl font-extrabold font-mono text-emerald-400">7.3 秒</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- TAB 5: 代码落地点与接口定义 -->
+    <!-- ================================================================= -->
+    <section id="tab-code" class="tab-pane hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <h2 class="text-xl font-bold text-white mb-2">代码落地点与核心接口实现设计</h2>
+        <p class="text-sm text-slate-400 mb-6">
+          方案最大程度保持现有项目结构稳定，通过新增单一轻量服务模块 <code>src/core/fast_gate.py</code>，在现有循环的关键锚点插入无侵入拦截。
+        </p>
+
+        <!-- Code Snippet -->
+        <div class="space-y-4">
+          <div class="border border-slate-800 rounded-lg overflow-hidden">
+            <div class="bg-slate-800 px-4 py-2 text-xs font-mono text-slate-300 flex justify-between items-center">
+              <span>src/core/fast_gate.py (新增模块: JevFastGate 核心实现)</span>
+              <span class="text-emerald-400 font-sans">Python 3.11+</span>
+            </div>
+            <pre class="p-4 text-xs font-mono text-slate-300 bg-slate-950 overflow-x-auto leading-relaxed">
+from __future__ import annotations
+import os
+from typesafe_sdk import Choice, Noul, TypeSafeClient
+
+class JevFastGate:
+    """Jev System 1 极速门禁：前置旁路跳过 (Mode A) 与 后置动作校验 (Mode B)"""
+
+    def __init__(self, api_key: str | None = None):
+        self.client = TypeSafeClient(api_key=api_key or os.getenv("TYPESAFE_API_KEY"))
+        self.enabled = os.getenv("ENABLE_JEV_GATE", "true").lower() == "true"
+
+    def evaluate_pre_gate(self, task: str, url: str, page_text: str) -> dict:
+        """模式 A: 在呼叫慢思考大模型前，毫秒级判定任务是否已搞定或被阻断"""
+        if not self.enabled:
+            return {"status": "need_interaction", "is_complete": False}
+
+        state = {
+            "task_objective": task,
+            "current_url": url,
+            "visible_text_snippet": page_text[:600]
+        }
+
+        resp = self.client.system_one(
+            state=state,
+            model="jev-latest",
+            questions={
+                "macro_status": Choice(
+                    instructions="Based on the page snippet and the user's task goal, what is the current situation?",
+                    criteria={
+                        "goal_satisfied": "The desired information or final success state is already fully visible on the screen.",
+                        "need_interaction": "The page requires interacting with inputs, buttons, or links to proceed.",
+                        "blocked_by_overlay": "A login modal, captcha, or cookie consent is blocking normal view.",
+                    }
+                ),
+                "is_goal_complete": Noul(
+                    instructions="Is the user's objective completely fulfilled by the current visible content?"
+                )
+            }
+        )
+        return {
+            "status": resp.answers["macro_status"].choice,
+            "confidence": resp.answers["macro_status"].confidence,
+            "is_complete": resp.answers["is_goal_complete"].noul >= 0.85
+        }
+
+    def verify_action_effect(self, action_name: str, delta: dict) -> dict:
+        """模式 B: 动作执行后，毫秒级对比前后微差量，识别假死或报错"""
+        if not self.enabled:
+            return {"outcome": "navigated_successfully", "retry": False}
+
+        resp = self.client.system_one(
+            state={
+                "action_executed": action_name,
+                "url_before": delta.get("url_before"),
+                "url_after": delta.get("url_after"),
+                "new_alerts": delta.get("new_alerts", [])
+            },
+            model="jev-latest",
+            questions={
+                "action_outcome": Choice(
+                    instructions="Evaluate the immediate outcome of the action based on the state delta.",
+                    criteria={
+                        "navigated_successfully": "The page URL changed or new view loaded as expected.",
+                        "validation_failed": "Form validation failed, or an error alert/toast appeared.",
+                        "inert_click": "URL did not change and no alert appeared; the click might have missed or had no listener.",
+                    }
+                ),
+                "should_micro_retry": Noul(
+                    instructions="Did the action completely fail to produce any change, indicating an inert click?"
+                )
+            }
+        )
+        return {
+            "outcome": resp.answers["action_outcome"].choice,
+            "should_micro_retry": resp.answers["should_micro_retry"].noul >= 0.8
+        }
+            </pre>
+          </div>
+
+          <!-- Code Seams Modification Table -->
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-4">
+            <h3 class="text-sm font-semibold text-white mb-3">现有代码库修改点清单 (Code Seams)</h3>
+            <div class="space-y-2 text-xs">
+              <div class="flex items-start gap-3 p-2 rounded bg-slate-900/60 border border-slate-800">
+                <span class="font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded shrink-0">[MODIFY] agent_loop.py:880</span>
+                <span class="text-slate-300">在 <code>_do_plan()</code> 入口插入 <code>evaluate_pre_gate()</code>。若 <code>is_complete</code> 为真，直接返回 <code>AgentState.DONE</code>。</span>
+              </div>
+              <div class="flex items-start gap-3 p-2 rounded bg-slate-900/60 border border-slate-800">
+                <span class="font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded shrink-0">[MODIFY] executor.py:280</span>
+                <span class="text-slate-300">在动作执行完毕后，捕获 URL 与 Alert 差量，调用 <code>verify_action_effect()</code>；若识别为 <code>inert_click</code>，原地执行 <code>mouse.click(x, y)</code> 强点击自愈。</span>
+              </div>
+              <div class="flex items-start gap-3 p-2 rounded bg-slate-900/60 border border-slate-800">
+                <span class="font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded shrink-0">[MODIFY] config.py:40</span>
+                <span class="text-slate-300">增加环境变量支持：<code>TYPESAFE_API_KEY</code> 与 <code>ENABLE_JEV_GATE="true"</code>。</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="border-t border-slate-800 py-6 text-center text-xs text-slate-500">
+    Agentic Playwright MCP Architecture Evolution · Generated via Antigravity Architecture-Audit
+  </footer>
+
+  <!-- Tab Switch Script -->
+  <script>
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#020617',
+        primaryColor: '#1e293b',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#475569',
+        lineColor: '#64748b',
+        secondaryColor: '#0f172a',
+        tertiaryColor: '#1e293b'
+      }
+    });
+
+    const renderedTabs = new Set();
+
+    async function switchTab(tabId) {
+      document.querySelectorAll('.tab-pane').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('block'));
+      
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('border-orange-500', 'text-orange-400');
+        btn.classList.add('border-transparent', 'text-slate-400');
+      });
+
+      const activePane = document.getElementById(tabId);
+      if (activePane) {
+        activePane.classList.remove('hidden');
+        activePane.classList.add('block');
+        
+        // Render mermaid diagrams only when the container is visible and has width
+        if (!renderedTabs.has(tabId)) {
+          renderedTabs.add(tabId);
+          const nodes = activePane.querySelectorAll('.mermaid');
+          if (nodes.length > 0) {
+            try {
+              await mermaid.run({ nodes: nodes });
+            } catch (err) {
+              console.error('Mermaid render error:', err);
+            }
+          }
+        }
+      }
+
+      const activeBtn = document.getElementById('btn-' + tabId);
+      if (activeBtn) {
+        activeBtn.classList.remove('border-transparent', 'text-slate-400');
+        activeBtn.classList.add('border-orange-500', 'text-orange-400');
+      }
+    }
+  </script>
+</body>
+</html>

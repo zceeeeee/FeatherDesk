@@ -5,9 +5,11 @@ Registers browser-automation tools via FastMCP and exposes them to MCP
 clients (e.g. Claude Desktop).  All tools return synchronously using
 Playwright's sync_api.
 
-工具分为两类:
-1. 脚本工具（新增）: browse_skills, get_skill, write_script, run_script, analyze_page
-2. 基础工具（保留）: ping, browser_launch, screenshot
+注册的 18 个核心 MCP 工具涵盖：
+1. 自动化任务: run_task
+2. 技能与脚本沙箱: browse_skills, get_skill, run_script, analyze_page
+3. 浏览器与站点凭证: ping, browser_launch, browser_launch_with_domain, screenshot, auth_list, auth_save, auth_delete
+4. 用户交互面板: panel_toggle, panel_read, panel_log, panel_set_title, panel_prompt, panel_set_fields
 """
 
 from __future__ import annotations

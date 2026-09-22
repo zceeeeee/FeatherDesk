@@ -2,7 +2,7 @@
 
 ## 状态
 
-接受
+已演进 (Superseded by 6-State Sync Loop)
 
 ## 上下文
 
@@ -432,7 +432,23 @@ class AgentLoop:
 2. 跨会话记忆
 3. 协作执行
 
+## 架构演化与现行状态 (Evolution & Current Implementation)
+
+在项目的多轮迭代实践中，原规划的 10 状态异步设计演进为了更加紧凑、确定性更强的 **6 状态同步状态机**（实现于 `src/core/agent_loop.py`）：
+
+### 1. 现行 6 状态模型 (`AgentState`)
+- **`OBSERVE`**：提取页面初始可交互元素摘要（通过 `dom_explorer.summarize_page`）。
+- **`PLAN`**：核心决策中枢。执行 `SkillRouter` 两阶段路由（正则初筛 + LLM 重排）；未命中或明确要求探索时分流至 `EXPLORE` 模式；纯桌面任务在此校验。
+- **`ACT`**：执行动作。若为技能路由产物，调用 `ScriptEngine.execute()` 执行生成的 Python 脚本；若为探索模式，调用 `ExploreExecutor` 批量执行底层操作。
+- **`EXPLORE`**：自主网页探索。基于 ARIA 语义树快照（`SnapshotGenerator`）生成带 `e1, e2...` 引用的交互树，必要时经由 `VisionRouter` 触发深度扫描、Windows 本地 WinRT OCR 或多模态视觉定位。
+- **`DONE`**：任务圆满完成，汇总 Token 指标、耗时与产物。
+- **`FAILED`**：不可恢复的错误、步数超过限制（默认 20 步）或收到主动取消信号。
+
+### 2. 同步执行设计 (Sync Architecture)
+- 原设计设想的全异步执行（`async def run`）在结合 Playwright Python 的 `sync_api` 时容易引发跨线程事件循环冲突。因此当前 `AgentLoop.run()` 全面采用**同步执行模型**，并通过统一的单线程任务调度器（Desktop 的 `max_workers=1` 线程池与 Flask 的 `threaded=False`）保障执行稳定性。
+
 ## 相关决策
 
 - [ADR-001: 三层架构设计](001-three-layer-architecture.md)
 - [ADR-002: 沙箱脚本引擎](002-sandboxed-script-engine.md)
+

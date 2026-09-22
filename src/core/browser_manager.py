@@ -3,8 +3,8 @@ Playwright / CloakBrowser 浏览器生命周期管理器。
 
 提供单例模式的 BrowserManager，负责启动/关闭浏览器实例。
 根据 USE_CLOAKBROWSER 环境变量选择引擎：
-  - false（默认）: 官方 Playwright Chromium
-  - true: CloakBrowser（反检测 Chromium，需 pip install agentic-playwright-mcp[stealth]）
+  - true（默认）: CloakBrowser（反检测 Chromium，需 pip install agentic-playwright-mcp[stealth]）
+  - false: 官方 Playwright Chromium
 
 所有页面操作通过 get_page() 获取统一入口。
 

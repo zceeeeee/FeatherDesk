@@ -71,3 +71,7 @@ skills/stitch-design-taste
 .vscode/
 .opencode.json
 skills-lock.json
+.obsidian/
+data/
+out/
+
