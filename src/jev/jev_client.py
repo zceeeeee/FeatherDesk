@@ -27,6 +27,24 @@ class JevDecision(BaseModel):
     mode: str = Field(default="cloud_api", description="Execution mode: 'cloud_api' or 'heuristic_fallback'")
     model_name: str = Field(default="jev-latest", description="Model name evaluated")
     rationale: str = Field(default="", description="Reasoning or description of the decision")
+    timing_ms: float = Field(default=0.0, description="Planning inference duration in milliseconds")
+
+
+class ComparisonResult(BaseModel):
+    """Aggregate comparison metrics between Jev (System 1) and LLM (System 2)."""
+    jev_target: str = Field(default="none")
+    jev_action: str = Field(default="none")
+    jev_timing_ms: float = Field(default=0.0)
+    llm_target: str = Field(default="none")
+    llm_action: str = Field(default="none")
+    llm_timing_ms: float = Field(default=0.0)
+    llm_model: str = Field(default="")
+    is_agreement: bool = Field(default=False)
+    speedup_ratio: float = Field(default=1.0)
+    latency_diff_ms: float = Field(default=0.0)
+    summary: str = Field(default="")
+    jev_decision: Optional[Any] = Field(default=None)
+    llm_decision: Optional[Any] = Field(default=None)
 
 
 def _extract_fill_value_from_task(task: str) -> Optional[str]:
@@ -66,16 +84,20 @@ class JevPlanner:
         If TYPESAFE_API_KEY is valid, queries TypeSafe Jev API.
         Otherwise falls back to high-fidelity local heuristic mode.
         """
+        import time
+        t_start = time.perf_counter()
         if self.api_key:
             try:
-                return self._call_typesafe_api(task, page_url, page_title, elements)
+                dec = self._call_typesafe_api(task, page_url, page_title, elements)
             except Exception as e:
                 # Log fallback and proceed with heuristic
-                fallback_decision = self._heuristic_plan(task, page_url, page_title, elements)
-                fallback_decision.rationale = f"[API Fallback due to: {e}] " + fallback_decision.rationale
-                return fallback_decision
+                dec = self._heuristic_plan(task, page_url, page_title, elements)
+                dec.rationale = f"[API Fallback due to: {e}] " + dec.rationale
         else:
-            return self._heuristic_plan(task, page_url, page_title, elements)
+            dec = self._heuristic_plan(task, page_url, page_title, elements)
+
+        dec.timing_ms = round((time.perf_counter() - t_start) * 1000, 1)
+        return dec
 
     def _call_typesafe_api(
         self,

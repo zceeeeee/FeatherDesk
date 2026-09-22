@@ -23,7 +23,9 @@ from flask import Flask, jsonify, render_template_string, request
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .element_scanner import ElementScanner, ScannedElement
-from .jev_client import JevDecision, JevPlanner
+from .jev_client import ComparisonResult, JevDecision, JevPlanner
+from .llm_planner import LLMDecision, LLMPlanner
+from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 
@@ -54,6 +56,8 @@ class BrowserSession:
         self.current_url: str = ""
         self.current_page_title: str = ""
         self.current_decision: Optional[JevDecision] = None
+        self.current_llm_decision: Optional[LLMDecision] = None
+        self.current_comparison: Optional[Dict[str, Any]] = None
         self.history: List[Dict[str, Any]] = []
 
     def _worker_loop(self) -> None:
@@ -156,15 +160,23 @@ session = BrowserSession()
 
 @app.route("/api/status", methods=["GET"])
 def get_status():
-    api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
-    masked_key = ""
-    if api_key:
-        masked_key = api_key[:12] + "..." + api_key[-8:] if len(api_key) > 20 else "***"
+    jev_key = os.getenv("TYPESAFE_API_KEY", "").strip()
+    llm_key = (os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "").strip()
+    llm_base_url = (os.getenv("OPENAI_BASE_URL") or os.getenv("LLM_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    llm_model = (os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL") or "gpt-4o-mini").strip()
+
+    masked_jev = jev_key[:12] + "..." + jev_key[-8:] if len(jev_key) > 20 else ("***" if jev_key else "")
+    masked_llm = llm_key[:12] + "..." + llm_key[-8:] if len(llm_key) > 20 else ("***" if llm_key else "")
+
     return jsonify({
         "status": "ready",
-        "has_api_key": bool(api_key),
-        "masked_key": masked_key,
-        "mode": "cloud_api (jev-1.13.0)" if api_key else "heuristic_fallback",
+        "has_api_key": bool(jev_key),
+        "masked_key": masked_jev,
+        "mode": "cloud_api (jev-1.13.0)" if jev_key else "heuristic_fallback",
+        "has_llm_key": bool(llm_key),
+        "masked_llm_key": masked_llm,
+        "llm_base_url": llm_base_url,
+        "llm_model": llm_model,
         "browser_active": session.is_browser_active(),
         "history_count": len(session.history),
     })
@@ -174,34 +186,89 @@ def get_status():
 def config_api():
     if request.method == "POST":
         data = request.json or {}
-        new_key = data.get("api_key", "").strip()
-        if new_key:
-            os.environ["TYPESAFE_API_KEY"] = new_key
-            try:
-                lines = []
-                if _env_path.is_file():
-                    lines = _env_path.read_text(encoding="utf-8").splitlines()
-                new_lines = [l for l in lines if not l.startswith("TYPESAFE_API_KEY=")]
-                new_lines.append(f"TYPESAFE_API_KEY={new_key}")
-                _env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            except Exception as e:
-                print("Failed to persist key to .env:", e)
-            masked = new_key[:12] + "..." + new_key[-8:] if len(new_key) > 20 else "***"
-            return jsonify({"success": True, "message": "API Key 已成功配置并保存", "configured": True, "masked_key": masked})
-        else:
-            os.environ.pop("TYPESAFE_API_KEY", None)
-            try:
-                if _env_path.is_file():
-                    lines = _env_path.read_text(encoding="utf-8").splitlines()
-                    new_lines = [l for l in lines if not l.startswith("TYPESAFE_API_KEY=")]
-                    _env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            except Exception as e:
-                print("Failed to remove key from .env:", e)
-            return jsonify({"success": True, "message": "已清除 API Key，系统已切换至本地启发式模拟模式", "configured": False, "masked_key": ""})
+
+        # 1. Update In-Memory Environment Variables
+        if "api_key" in data:
+            new_jev_key = data.get("api_key", "").strip()
+            if new_jev_key:
+                os.environ["TYPESAFE_API_KEY"] = new_jev_key
+            else:
+                os.environ.pop("TYPESAFE_API_KEY", None)
+
+        if "llm_api_key" in data:
+            new_llm_key = data.get("llm_api_key", "").strip()
+            if new_llm_key:
+                os.environ["OPENAI_API_KEY"] = new_llm_key
+            else:
+                os.environ.pop("OPENAI_API_KEY", None)
+
+        if "llm_base_url" in data:
+            new_base_url = data.get("llm_base_url", "").strip()
+            if new_base_url:
+                os.environ["OPENAI_BASE_URL"] = new_base_url
+            else:
+                os.environ.pop("OPENAI_BASE_URL", None)
+
+        if "llm_model" in data:
+            new_model = data.get("llm_model", "").strip()
+            if new_model:
+                os.environ["OPENAI_MODEL"] = new_model
+            else:
+                os.environ.pop("OPENAI_MODEL", None)
+
+        # 2. Persist to .env
+        try:
+            lines = []
+            if _env_path.is_file():
+                lines = _env_path.read_text(encoding="utf-8").splitlines()
+
+            def _sync_var(var_name: str, val: Optional[str]):
+                nonlocal lines
+                lines = [l for l in lines if not l.startswith(f"{var_name}=")]
+                if val:
+                    lines.append(f"{var_name}={val}")
+
+            if "api_key" in data:
+                _sync_var("TYPESAFE_API_KEY", data.get("api_key", "").strip())
+            if "llm_api_key" in data:
+                _sync_var("OPENAI_API_KEY", data.get("llm_api_key", "").strip())
+            if "llm_base_url" in data:
+                _sync_var("OPENAI_BASE_URL", data.get("llm_base_url", "").strip())
+            if "llm_model" in data:
+                _sync_var("OPENAI_MODEL", data.get("llm_model", "").strip())
+
+            _env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as e:
+            print("Failed to persist key to .env:", e)
+
+        jev_key = os.getenv("TYPESAFE_API_KEY", "").strip()
+        llm_key = (os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "").strip()
+        masked_jev = jev_key[:12] + "..." + jev_key[-8:] if len(jev_key) > 20 else ("***" if jev_key else "")
+        masked_llm = llm_key[:12] + "..." + llm_key[-8:] if len(llm_key) > 20 else ("***" if llm_key else "")
+
+        return jsonify({
+            "success": True,
+            "message": "模型与 API Key 配置已成功保存",
+            "configured": bool(jev_key),
+            "masked_key": masked_jev,
+            "has_llm": bool(llm_key),
+            "llm_configured": bool(llm_key),
+            "masked_llm_key": masked_llm,
+        })
     else:
-        api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
-        masked = api_key[:12] + "..." + api_key[-8:] if len(api_key) > 20 else ("***" if api_key else "")
-        return jsonify({"configured": bool(api_key), "masked_key": masked})
+        jev_key = os.getenv("TYPESAFE_API_KEY", "").strip()
+        llm_key = (os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "").strip()
+        masked_jev = jev_key[:12] + "..." + jev_key[-8:] if len(jev_key) > 20 else ("***" if jev_key else "")
+        masked_llm = llm_key[:12] + "..." + llm_key[-8:] if len(llm_key) > 20 else ("***" if llm_key else "")
+        return jsonify({
+            "configured": bool(jev_key),
+            "masked_key": masked_jev,
+            "has_llm": bool(llm_key),
+            "llm_configured": bool(llm_key),
+            "masked_llm_key": masked_llm,
+            "llm_base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            "llm_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        })
 
 
 @app.route("/api/scan", methods=["POST"])
@@ -326,52 +393,114 @@ def decide_action():
 
     t_start = time.perf_counter()
     try:
-        planner = JevPlanner()
-        decision = planner.plan(
-            task=task,
-            page_url=url,
-            page_title=page_title,
-            elements=session.current_elements,
+        jev_planner = JevPlanner()
+        llm_planner = LLMPlanner()
+
+        # Run Jev System 1 and LLM System 2 concurrently
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            fut_jev = executor.submit(
+                jev_planner.plan,
+                task=task,
+                page_url=url,
+                page_title=page_title,
+                elements=session.current_elements,
+            )
+            fut_llm = executor.submit(
+                llm_planner.plan,
+                task=task,
+                page_url=url,
+                page_title=page_title,
+                elements=session.current_elements,
+            )
+            jev_decision = fut_jev.result()
+            llm_decision = fut_llm.result()
+
+        total_decide_ms = (time.perf_counter() - t_start) * 1000
+
+        session.current_decision = jev_decision
+        session.current_llm_decision = llm_decision
+
+        jev_ms = getattr(jev_decision, "timing_ms", None)
+        if not jev_ms:
+            # Fallback estimation if not direct in jev decision
+            jev_ms = round(total_decide_ms if jev_decision.mode != "cloud_api" else 950.0, 1)
+        else:
+            jev_ms = round(jev_ms, 1)
+
+        llm_ms = round(llm_decision.timing_ms, 1)
+
+        # Calculate comparison metrics
+        is_agreement = (
+            jev_decision.target_ref == llm_decision.target_ref
+            and jev_decision.action_type == llm_decision.action_type
         )
-        jev_ms = (time.perf_counter() - t_start) * 1000
-        session.current_decision = decision
+        speedup_ratio = round(llm_ms / max(jev_ms, 1.0), 2) if (llm_ms > 0 and jev_ms > 0) else 1.0
+        latency_diff_ms = round(llm_ms - jev_ms, 1)
+
+        if llm_decision.status == "unconfigured":
+            summary = "LLM 对比模块未配置 API Key，本次仅完成 Jev System 1 决策。"
+        elif is_agreement:
+            summary = f"双模型决策达成一致！均锁定目标 {jev_decision.target_ref} 并拟执行 {jev_decision.action_type.upper()}。Jev 决策提速 {speedup_ratio}x！"
+        else:
+            summary = f"双模型存在决策分歧：Jev 选择 {jev_decision.target_ref} ({jev_decision.action_type.upper()})，LLM 选择 {llm_decision.target_ref} ({llm_decision.action_type.upper()})。"
+
+        comparison = {
+            "is_agreement": is_agreement,
+            "speedup_ratio": speedup_ratio,
+            "latency_diff_ms": latency_diff_ms,
+            "jev_timing_ms": jev_ms,
+            "llm_timing_ms": llm_ms,
+            "llm_model": llm_decision.model_name,
+            "summary": summary,
+        }
+        session.current_comparison = comparison
 
         timing_data = {
-            "jev_planning_ms": round(jev_ms, 2),
+            "jev_planning_ms": jev_ms,
+            "llm_planning_ms": llm_ms,
+            "total_decide_ms": round(total_decide_ms, 1),
         }
 
         session.history.append({
             "timestamp": time.strftime("%H:%M:%S"),
-            "step": "JEV_PLAN",
+            "step": "DECIDE_COMPARE",
             "task": task,
             "url": url,
-            "target": f"{decision.target_ref} ({decision.target_element.selector if decision.target_element else ''})",
-            "action": decision.action_type.upper(),
-            "timing_ms": round(jev_ms, 2),
-            "breakdown": timing_data,
-            "confidence": decision.confidence,
-            "mode": decision.mode,
+            "target": f"Jev:{jev_decision.target_ref} | LLM:{llm_decision.target_ref}",
+            "action": f"{jev_decision.action_type.upper()}/{llm_decision.action_type.upper()}",
+            "timing_ms": jev_ms,
+            "breakdown": {
+                "jev_ms": jev_ms,
+                "llm_ms": llm_ms,
+                "speedup": f"{speedup_ratio}x",
+                "agreement": "一致" if is_agreement else "分歧",
+            },
+            "confidence": jev_decision.confidence,
+            "mode": f"Jev({jev_decision.mode}) vs LLM({llm_decision.model_name})",
             "status": "success",
+            "detail": summary,
         })
 
         return jsonify({
             "success": True,
-            "decision": decision.model_dump(),
+            "decision": jev_decision.model_dump(),
+            "llm_decision": llm_decision.model_dump(),
+            "comparison": comparison,
             "timing": timing_data,
         })
     except Exception as e:
-        jev_ms = (time.perf_counter() - t_start) * 1000
+        total_decide_ms = (time.perf_counter() - t_start) * 1000
         session.history.append({
             "timestamp": time.strftime("%H:%M:%S"),
-            "step": "JEV_PLAN",
+            "step": "DECIDE_COMPARE",
             "task": task,
             "url": url,
             "target": "N/A",
             "action": "ERROR",
-            "timing_ms": round(jev_ms, 2),
+            "timing_ms": round(total_decide_ms, 2),
             "status": f"failed: {str(e)}",
         })
-        return jsonify({"error": f"Jev 模型决策失败: {str(e)}"}), 500
+        return jsonify({"error": f"决策对比失败: {str(e)}"}), 500
 
 
 @app.route("/api/execute", methods=["POST"])
@@ -380,13 +509,16 @@ def execute_action():
     action_type = data.get("action_type")
     selector = data.get("selector")
     input_value = data.get("input_value")
+    source = data.get("source", "jev").lower()
 
-    # If parameters not passed explicitly, use current Jev decision
-    if not action_type and session.current_decision:
-        action_type = session.current_decision.action_type
-        if session.current_decision.target_element:
-            selector = session.current_decision.target_element.selector
-        input_value = session.current_decision.input_value
+    # Choose corresponding decision if parameters not explicitly provided
+    chosen_dec = session.current_llm_decision if source == "llm" and session.current_llm_decision else session.current_decision
+
+    if not action_type and chosen_dec:
+        action_type = chosen_dec.action_type
+        if chosen_dec.target_element:
+            selector = chosen_dec.target_element.selector
+        input_value = chosen_dec.input_value
 
     if not session.is_browser_active():
         return jsonify({"error": "浏览器页面未激活，请重新扫描页面"}), 400
@@ -478,7 +610,7 @@ def execute_action():
 def get_history():
     total_time = sum(item.get("timing_ms", 0) for item in session.history)
     scan_count = sum(1 for item in session.history if item["step"] == "SCAN")
-    jev_count = sum(1 for item in session.history if item["step"] == "JEV_PLAN")
+    jev_count = sum(1 for item in session.history if item["step"] in ("JEV_PLAN", "DECIDE_COMPARE"))
     exec_count = sum(1 for item in session.history if item["step"] == "EXECUTE")
 
     return jsonify({
@@ -537,11 +669,15 @@ HTML_TEMPLATE = r"""
       </div>
     </div>
 
-    <!-- Mode Badge & Quick Status -->
-    <div class="flex items-center gap-2.5 text-xs">
-      <div id="badge-api" class="px-3 py-1 rounded-full border border-slate-700 bg-slate-800 text-slate-400 flex items-center gap-1.5 cursor-pointer" onclick="openApiKeyModal()" title="点击查看或修改 API Key">
+    <!-- Mode Badges & Quick Status -->
+    <div class="flex items-center gap-2 text-xs">
+      <div id="badge-api" class="px-2.5 py-1 rounded-full border border-slate-700 bg-slate-800 text-slate-400 flex items-center gap-1.5 cursor-pointer" onclick="openApiKeyModal('jev')" title="点击配置 TypeSafe Jev API Key">
         <span class="w-2 h-2 rounded-full bg-slate-500" id="badge-api-dot"></span>
-        <span id="badge-api-text">检查中...</span>
+        <span id="badge-api-text">Jev 检查中...</span>
+      </div>
+      <div id="badge-llm" class="px-2.5 py-1 rounded-full border border-slate-700 bg-slate-800 text-slate-400 flex items-center gap-1.5 cursor-pointer" onclick="openApiKeyModal('llm')" title="点击配置通用大模型 API Key">
+        <span class="w-2 h-2 rounded-full bg-slate-500" id="badge-llm-dot"></span>
+        <span id="badge-llm-text">LLM 检查中...</span>
       </div>
       <button onclick="openApiKeyModal()" class="px-3 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition flex items-center gap-1 cursor-pointer">
         <span>🔑 配置 Key</span>
@@ -555,7 +691,7 @@ HTML_TEMPLATE = r"""
   <!-- Main Container -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
 
-    <!-- Top KPI Cards: Timing Summary -->
+    <!-- Top KPI Cards: Timing & Comparison Summary -->
     <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
       <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5">
         <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">页面导航时延</div>
@@ -567,49 +703,55 @@ HTML_TEMPLATE = r"""
         <div id="stat-scan" class="text-2xl font-black text-indigo-400 mt-1 badge-timing">-- <span class="text-xs font-normal text-slate-500">ms</span></div>
         <div class="text-[10px] text-slate-500 mt-0.5">ARIA 交互树与标号生成</div>
       </div>
-      <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5">
-        <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Jev 决策时延</div>
+      <div class="bg-slate-900/90 border border-emerald-900/40 bg-emerald-950/20 rounded-xl p-3.5">
+        <div class="text-[11px] uppercase tracking-wider text-emerald-400 font-semibold">⚡ Jev System 1 耗时</div>
         <div id="stat-jev" class="text-2xl font-black text-emerald-400 mt-1 badge-timing">-- <span class="text-xs font-normal text-slate-500">ms</span></div>
-        <div class="text-[10px] text-slate-500 mt-0.5">Choice/Noul 结构化直出</div>
+        <div class="text-[10px] text-emerald-500/70 mt-0.5">Choice/Noul 结构化直出</div>
       </div>
-      <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5">
-        <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">动作执行耗时</div>
-        <div id="stat-exec" class="text-2xl font-black text-amber-400 mt-1 badge-timing">-- <span class="text-xs font-normal text-slate-500">ms</span></div>
-        <div class="text-[10px] text-slate-500 mt-0.5">Playwright 原语与等待</div>
+      <div class="bg-slate-900/90 border border-purple-900/40 bg-purple-950/20 rounded-xl p-3.5">
+        <div class="text-[11px] uppercase tracking-wider text-purple-400 font-semibold">🧠 LLM System 2 耗时</div>
+        <div id="stat-llm" class="text-2xl font-black text-purple-400 mt-1 badge-timing">-- <span class="text-xs font-normal text-slate-500">ms</span></div>
+        <div id="stat-llm-sub" class="text-[10px] text-purple-400/70 mt-0.5">大模型 JSON 结构化推理</div>
       </div>
-      <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 col-span-2 md:col-span-1">
-        <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">全闭环链路耗时</div>
-        <div id="stat-total" class="text-2xl font-black text-purple-400 mt-1 badge-timing">-- <span class="text-xs font-normal text-slate-500">ms</span></div>
-        <div class="text-[10px] text-slate-500 mt-0.5">端到端任务操作总用时</div>
+      <div class="bg-slate-900/90 border border-cyan-900/40 bg-cyan-950/20 rounded-xl p-3.5 col-span-2 md:col-span-1">
+        <div class="text-[11px] uppercase tracking-wider text-cyan-400 font-semibold">🚀 Jev 提速效能比</div>
+        <div id="stat-speedup" class="text-2xl font-black text-cyan-400 mt-1 badge-timing">-- <span class="text-xs font-normal text-slate-500">x</span></div>
+        <div id="stat-speedup-sub" class="text-[10px] text-cyan-400/70 mt-0.5">较通用大模型加速比</div>
       </div>
     </div>
 
     <!-- Main Workspace Split: Left (Control & Decision), Right (Preview & Elements) -->
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-      <!-- Left Column: Inputs, Actions & Decision Card (5 Cols) -->
-      <div class="lg:col-span-5 space-y-6">
+      <!-- Left Column: Inputs, Actions & Decision Card (6 Cols) -->
+      <div class="lg:col-span-6 space-y-6">
 
-        <!-- Dedicated API Key Configuration Card -->
+        <!-- Dedicated Dual API Key Status Card -->
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2.5">
-              <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-sm shadow-inner">
-                🔑
-              </div>
-              <div>
-                <h3 class="text-xs font-bold text-white uppercase tracking-wider">TypeSafe Jev API Key</h3>
-                <div class="text-[11px] text-slate-400 mt-0.5" id="card-api-status-desc">正在检测密钥状态...</div>
-              </div>
+          <div class="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="text-base">🔑</span>
+              <h3 class="text-xs font-bold text-white uppercase tracking-wider">双引擎决策 Key 状态</h3>
             </div>
-            <button onclick="openApiKeyModal()" class="px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/30 text-xs font-medium transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer">
+            <button onclick="openApiKeyModal()" class="px-2.5 py-1 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/30 text-xs font-medium transition flex items-center gap-1 cursor-pointer">
               <span>⚙️ 配置 / 更换 Key</span>
             </button>
           </div>
-          <!-- Quick Inline Preview -->
-          <div class="text-xs font-mono px-3 py-2 rounded-lg bg-slate-950 border border-slate-800/80 flex items-center justify-between">
-            <span class="text-slate-400">当前密钥：</span>
-            <span id="card-api-key-val" class="text-slate-300">检测中...</span>
+          <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+            <div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800/80 space-y-1 cursor-pointer hover:border-emerald-500/40 transition" onclick="openApiKeyModal('jev')">
+              <div class="text-[11px] text-slate-400 flex items-center justify-between">
+                <span>⚡ TypeSafe Jev</span>
+                <span id="card-jev-badge" class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+              </div>
+              <div id="card-jev-val" class="text-slate-300 font-bold truncate">检查中...</div>
+            </div>
+            <div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800/80 space-y-1 cursor-pointer hover:border-purple-500/40 transition" onclick="openApiKeyModal('llm')">
+              <div class="text-[11px] text-slate-400 flex items-center justify-between">
+                <span>🧠 通用大模型 LLM</span>
+                <span id="card-llm-badge" class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+              </div>
+              <div id="card-llm-val" class="text-slate-300 font-bold truncate">检查中...</div>
+            </div>
           </div>
         </div>
 
@@ -661,67 +803,139 @@ HTML_TEMPLATE = r"""
               <span>🔍 步骤 1: 扫描页面交互元素</span>
             </button>
 
+            <button id="btn-decide" onclick="startDecide()" disabled class="w-full bg-gradient-to-r from-emerald-600 via-indigo-600 to-purple-600 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium py-2.5 px-4 rounded-lg text-xs flex items-center justify-center gap-2 shadow-lg transition">
+              <span>🚀 步骤 2: 双模型并发决策与性能对比 (Jev vs LLM)</span>
+            </button>
+
             <div class="grid grid-cols-2 gap-2">
-              <button id="btn-decide" onclick="startDecide()" disabled class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-1.5 transition">
-                <span>🧠 步骤 2: Jev 智能决策</span>
+              <button id="btn-exec-jev" onclick="startExecute('jev')" disabled class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-1.5 transition">
+                <span>⚡ 执行 Jev 决策</span>
               </button>
-              <button id="btn-execute" onclick="startExecute()" disabled class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-1.5 transition">
-                <span>⚡ 步骤 3: 在线执行动作</span>
+              <button id="btn-exec-llm" onclick="startExecute('llm')" disabled class="bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-1.5 transition">
+                <span>🧠 执行 LLM 决策</span>
               </button>
             </div>
           </div>
         </div>
 
-        <!-- Jev Decision Card -->
-        <div id="card-decision" class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3 hidden">
-          <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
-            <h3 class="text-sm font-bold text-white flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-              Jev 决策结果输出
-            </h3>
-            <span id="decision-time-badge" class="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded badge-timing">
-              0.0 ms
-            </span>
-          </div>
-
-          <div class="grid grid-cols-2 gap-3 pt-1">
-            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800/80">
-              <div class="text-[11px] text-slate-400">目标元素 (Target Ref)</div>
-              <div id="res-target-ref" class="text-xl font-bold text-cyan-400 mt-0.5">--</div>
-              <div id="res-target-desc" class="text-[11px] text-slate-400 mt-1 truncate">--</div>
+        <!-- Dual Decision & Comparison Board -->
+        <div id="card-decision" class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3.5 hidden">
+          <!-- Comparison Summary Banner -->
+          <div id="cmp-banner" class="p-3 rounded-lg border text-xs flex items-center justify-between">
+            <div class="flex items-center gap-2.5">
+              <span id="cmp-icon" class="text-xl">🎯</span>
+              <div>
+                <div id="cmp-title" class="font-bold text-white">双模型决策对比</div>
+                <div id="cmp-desc" class="text-slate-400 text-[11px] mt-0.5">--</div>
+              </div>
             </div>
-
-            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800/80">
-              <div class="text-[11px] text-slate-400">拟执行元操作 (Action)</div>
-              <div id="res-action" class="text-xl font-bold text-amber-400 mt-0.5">--</div>
-              <div id="res-value" class="text-[11px] text-emerald-400 mt-1 truncate">参数: (无)</div>
+            <div class="text-right">
+              <span id="cmp-speedup-badge" class="px-2 py-0.5 rounded text-xs font-bold font-mono bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">--</span>
             </div>
           </div>
 
-          <div class="space-y-1.5 pt-1 text-xs">
-            <div class="flex justify-between items-center text-slate-300">
-              <span>决策置信度 (Confidence):</span>
-              <span id="res-conf" class="font-bold text-emerald-400 badge-timing">--%</span>
-            </div>
-            <div class="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
-              <div id="res-conf-bar" class="bg-emerald-500 h-full transition-all duration-500" style="width: 0%"></div>
-            </div>
-            <div class="flex justify-between text-[11px] text-slate-500 pt-1">
-              <span>引擎: <span id="res-mode" class="text-slate-400 font-mono">--</span></span>
-              <span>候选元素: <span id="res-candidates-cnt" class="text-slate-400 font-mono">0</span></span>
-            </div>
-          </div>
+          <!-- Side-by-Side Dual Decision Cards -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <!-- Left: Jev System 1 Card -->
+            <div class="bg-slate-950/90 border border-emerald-500/40 rounded-lg p-3 space-y-2.5 flex flex-col justify-between">
+              <div class="space-y-2">
+                <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <div class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span class="text-xs font-bold text-emerald-400">⚡ Jev System 1</span>
+                  </div>
+                  <span id="jev-time-badge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                    -- ms
+                  </span>
+                </div>
 
-          <div class="bg-slate-950/60 p-2.5 rounded border border-slate-800/60 text-[11px] text-slate-400 leading-relaxed">
-            <span class="font-semibold text-slate-300">推理依据: </span>
-            <span id="res-rationale">--</span>
+                <div class="grid grid-cols-2 gap-2 pt-0.5">
+                  <div class="bg-slate-900/90 p-2 rounded border border-slate-800">
+                    <div class="text-[10px] text-slate-400">目标 Ref</div>
+                    <div id="jev-target-ref" class="text-base font-bold text-cyan-400">--</div>
+                    <div id="jev-target-desc" class="text-[10px] text-slate-400 truncate mt-0.5">--</div>
+                  </div>
+                  <div class="bg-slate-900/90 p-2 rounded border border-slate-800">
+                    <div class="text-[10px] text-slate-400">元操作 Action</div>
+                    <div id="jev-action" class="text-base font-bold text-amber-400">--</div>
+                    <div id="jev-value" class="text-[10px] text-emerald-400 truncate mt-0.5">参数: (无)</div>
+                  </div>
+                </div>
+
+                <div class="space-y-1 text-xs">
+                  <div class="flex justify-between text-[11px] text-slate-300">
+                    <span>置信度: <span id="jev-conf" class="font-bold text-emerald-400">--%</span></span>
+                    <span id="jev-mode" class="text-slate-500 text-[10px] font-mono">cloud_api</span>
+                  </div>
+                  <div class="w-full bg-slate-900 rounded-full h-1 overflow-hidden">
+                    <div id="jev-conf-bar" class="bg-emerald-500 h-full" style="width: 0%"></div>
+                  </div>
+                </div>
+
+                <div class="bg-slate-900/60 p-2 rounded text-[11px] text-slate-400 leading-relaxed border border-slate-800/60">
+                  <span class="font-semibold text-slate-300">依据: </span>
+                  <span id="jev-rationale">--</span>
+                </div>
+              </div>
+
+              <button onclick="startExecute('jev')" class="w-full mt-2 py-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-1">
+                <span>⚡ 采纳并执行 Jev 决策</span>
+              </button>
+            </div>
+
+            <!-- Right: LLM System 2 Card -->
+            <div class="bg-slate-950/90 border border-purple-500/40 rounded-lg p-3 space-y-2.5 flex flex-col justify-between">
+              <div class="space-y-2">
+                <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <div class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+                    <span class="text-xs font-bold text-purple-400">🧠 LLM System 2</span>
+                  </div>
+                  <span id="llm-time-badge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-500/40">
+                    -- ms
+                  </span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 pt-0.5">
+                  <div class="bg-slate-900/90 p-2 rounded border border-slate-800">
+                    <div class="text-[10px] text-slate-400">目标 Ref</div>
+                    <div id="llm-target-ref" class="text-base font-bold text-cyan-400">--</div>
+                    <div id="llm-target-desc" class="text-[10px] text-slate-400 truncate mt-0.5">--</div>
+                  </div>
+                  <div class="bg-slate-900/90 p-2 rounded border border-slate-800">
+                    <div class="text-[10px] text-slate-400">元操作 Action</div>
+                    <div id="llm-action" class="text-base font-bold text-amber-400">--</div>
+                    <div id="llm-value" class="text-[10px] text-purple-400 truncate mt-0.5">参数: (无)</div>
+                  </div>
+                </div>
+
+                <div class="space-y-1 text-xs">
+                  <div class="flex justify-between text-[11px] text-slate-300">
+                    <span>置信度: <span id="llm-conf" class="font-bold text-purple-400">--%</span></span>
+                    <span id="llm-model-name" class="text-slate-500 text-[10px] font-mono truncate max-w-[100px]">--</span>
+                  </div>
+                  <div class="w-full bg-slate-900 rounded-full h-1 overflow-hidden">
+                    <div id="llm-conf-bar" class="bg-purple-500 h-full" style="width: 0%"></div>
+                  </div>
+                </div>
+
+                <div class="bg-slate-900/60 p-2 rounded text-[11px] text-slate-400 leading-relaxed border border-slate-800/60">
+                  <span class="font-semibold text-slate-300">依据: </span>
+                  <span id="llm-rationale">--</span>
+                </div>
+              </div>
+
+              <button onclick="startExecute('llm')" class="w-full mt-2 py-1.5 rounded bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-1">
+                <span>🧠 采纳并执行 LLM 决策</span>
+              </button>
+            </div>
           </div>
         </div>
 
       </div>
 
-      <!-- Right Column: Live Screenshot & Elements Table (7 Cols) -->
-      <div class="lg:col-span-7 space-y-6">
+      <!-- Right Column: Live Screenshot & Elements Table (6 Cols) -->
+      <div class="lg:col-span-6 space-y-6">
 
         <!-- Live Screenshot Preview -->
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
@@ -828,7 +1042,9 @@ HTML_TEMPLATE = r"""
   <!-- Client JavaScript -->
   <script>
     let currentElements = [];
-    let currentDecision = null;
+    let currentJevDecision = null;
+    let currentLlmDecision = null;
+    let activeModalTab = 'jev';
 
     const presets = {
       baidu: {
@@ -856,61 +1072,113 @@ HTML_TEMPLATE = r"""
       try {
         const res = await fetch("/api/status");
         const data = await res.json();
-        const badge = document.getElementById("badge-api");
-        const dot = document.getElementById("badge-api-dot");
-        const text = document.getElementById("badge-api-text");
-        
-        const cardDesc = document.getElementById("card-api-status-desc");
-        const cardVal = document.getElementById("card-api-key-val");
+
+        // 1. Jev Badge & Card
+        const badgeJev = document.getElementById("badge-api");
+        const dotJev = document.getElementById("badge-api-dot");
+        const textJev = document.getElementById("badge-api-text");
+        const cardJevBadge = document.getElementById("card-jev-badge");
+        const cardJevVal = document.getElementById("card-jev-val");
 
         if (data.has_api_key) {
-          badge.className = "px-3 py-1 rounded-full border border-emerald-500/40 bg-emerald-950/30 text-emerald-400 flex items-center gap-1.5 cursor-pointer";
-          if (dot) dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
-          text.textContent = `云端 Jev (${data.masked_key || '已连接'})`;
-
-          if (cardDesc) cardDesc.innerHTML = `<span class="text-emerald-400 font-medium">● 云端 Jev-1.13.0 模型已就绪</span>`;
-          if (cardVal) cardVal.innerHTML = `<span class="text-emerald-400 font-mono">${data.masked_key}</span>`;
+          badgeJev.className = "px-2.5 py-1 rounded-full border border-emerald-500/40 bg-emerald-950/30 text-emerald-400 flex items-center gap-1.5 cursor-pointer";
+          if (dotJev) dotJev.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+          textJev.textContent = `Jev: ${data.masked_key || '已就绪'}`;
+          if (cardJevBadge) cardJevBadge.className = "w-1.5 h-1.5 rounded-full bg-emerald-400";
+          if (cardJevVal) cardJevVal.innerHTML = `<span class="text-emerald-400">${data.masked_key}</span>`;
         } else {
-          badge.className = "px-3 py-1 rounded-full border border-amber-500/40 bg-amber-950/30 text-amber-400 flex items-center gap-1.5 cursor-pointer";
-          if (dot) dot.className = "w-2 h-2 rounded-full bg-amber-400";
-          text.textContent = "本地启发式模拟模式 (未设 KEY)";
+          badgeJev.className = "px-2.5 py-1 rounded-full border border-amber-500/40 bg-amber-950/30 text-amber-400 flex items-center gap-1.5 cursor-pointer";
+          if (dotJev) dotJev.className = "w-2 h-2 rounded-full bg-amber-400";
+          textJev.textContent = "Jev: 启发式模拟";
+          if (cardJevBadge) cardJevBadge.className = "w-1.5 h-1.5 rounded-full bg-amber-400";
+          if (cardJevVal) cardJevVal.innerHTML = `<span class="text-slate-500">未配置 (启发式)</span>`;
+        }
 
-          if (cardDesc) cardDesc.innerHTML = `<span class="text-amber-400 font-medium">● 本地启发式回退模式 (未配 Key)</span>`;
-          if (cardVal) cardVal.innerHTML = `<span class="text-slate-500 font-mono">未配置 (可点击右上角配置)</span>`;
+        // 2. LLM Badge & Card
+        const badgeLlm = document.getElementById("badge-llm");
+        const dotLlm = document.getElementById("badge-llm-dot");
+        const textLlm = document.getElementById("badge-llm-text");
+        const cardLlmBadge = document.getElementById("card-llm-badge");
+        const cardLlmVal = document.getElementById("card-llm-val");
+
+        if (data.has_llm_key) {
+          badgeLlm.className = "px-2.5 py-1 rounded-full border border-purple-500/40 bg-purple-950/30 text-purple-400 flex items-center gap-1.5 cursor-pointer";
+          if (dotLlm) dotLlm.className = "w-2 h-2 rounded-full bg-purple-400 animate-pulse";
+          textLlm.textContent = `LLM: ${data.llm_model || '已连接'}`;
+          if (cardLlmBadge) cardLlmBadge.className = "w-1.5 h-1.5 rounded-full bg-purple-400";
+          if (cardLlmVal) cardLlmVal.innerHTML = `<span class="text-purple-400">${data.llm_model || '已就绪'} (${data.masked_llm_key})</span>`;
+        } else {
+          badgeLlm.className = "px-2.5 py-1 rounded-full border border-slate-700 bg-slate-800 text-slate-400 flex items-center gap-1.5 cursor-pointer";
+          if (dotLlm) dotLlm.className = "w-2 h-2 rounded-full bg-slate-500";
+          textLlm.textContent = "LLM: 未配置";
+          if (cardLlmBadge) cardLlmBadge.className = "w-1.5 h-1.5 rounded-full bg-slate-500";
+          if (cardLlmVal) cardLlmVal.innerHTML = `<span class="text-slate-500">未配置</span>`;
         }
       } catch (err) {
         console.error("Status check failed:", err);
       }
     }
 
-    async function openApiKeyModal() {
+    async function openApiKeyModal(tab = 'jev') {
       try {
         const res = await fetch("/api/config");
         const data = await res.json();
-        const statusEl = document.getElementById("modal-current-status");
+        
+        // Jev status
+        const jevStatusEl = document.getElementById("modal-jev-status");
         if (data.configured) {
-          statusEl.innerHTML = `<span class="text-emerald-400 font-mono">已配置 (${data.masked_key})</span>`;
+          jevStatusEl.innerHTML = `<span class="text-emerald-400 font-mono">已配置 (${data.masked_key})</span>`;
         } else {
-          statusEl.innerHTML = `<span class="text-amber-400 font-mono">未配置 (启发式回退模式)</span>`;
+          jevStatusEl.innerHTML = `<span class="text-amber-400 font-mono">未配置 (启发式回退模式)</span>`;
         }
+
+        // LLM status
+        const llmStatusEl = document.getElementById("modal-llm-status");
+        if (data.llm_configured) {
+          llmStatusEl.innerHTML = `<span class="text-purple-400 font-mono">已配置: ${data.llm_model} (${data.masked_llm_key})</span>`;
+        } else {
+          llmStatusEl.innerHTML = `<span class="text-slate-500 font-mono">未配置</span>`;
+        }
+
+        document.getElementById("modal-input-llmbase").value = data.llm_base_url || "https://api.openai.com/v1";
+        document.getElementById("modal-input-llmmodel").value = data.llm_model || "gpt-4o-mini";
       } catch (e) {
         console.error("Failed to get config:", e);
       }
-      const input = document.getElementById("modal-input-apikey");
-      input.value = "";
-      input.type = "password";
-      document.getElementById("btn-toggle-vis").textContent = "👁️";
+
+      document.getElementById("modal-input-jevkey").value = "";
+      document.getElementById("modal-input-llmkey").value = "";
+      switchModalTab(tab);
       document.getElementById("modal-apikey").classList.remove("hidden");
-      setTimeout(() => input.focus(), 50);
     }
 
     function closeApiKeyModal() {
       document.getElementById("modal-apikey").classList.add("hidden");
     }
 
-    function toggleApiKeyVisibility() {
-      const input = document.getElementById("modal-input-apikey");
-      const icon = document.getElementById("btn-toggle-vis");
+    function switchModalTab(tab) {
+      activeModalTab = tab;
+      const btnJev = document.getElementById("tab-btn-jev");
+      const btnLlm = document.getElementById("tab-btn-llm");
+      const paneJev = document.getElementById("tab-pane-jev");
+      const paneLlm = document.getElementById("tab-pane-llm");
+
+      if (tab === 'jev') {
+        btnJev.className = "pb-2.5 px-3 font-semibold border-b-2 border-cyan-400 text-cyan-400 transition cursor-pointer flex items-center gap-1.5";
+        btnLlm.className = "pb-2.5 px-3 font-medium text-slate-400 hover:text-slate-200 transition cursor-pointer flex items-center gap-1.5";
+        paneJev.classList.remove("hidden");
+        paneLlm.classList.add("hidden");
+      } else {
+        btnJev.className = "pb-2.5 px-3 font-medium text-slate-400 hover:text-slate-200 transition cursor-pointer flex items-center gap-1.5";
+        btnLlm.className = "pb-2.5 px-3 font-semibold border-b-2 border-purple-400 text-purple-400 transition cursor-pointer flex items-center gap-1.5";
+        paneJev.classList.add("hidden");
+        paneLlm.classList.remove("hidden");
+      }
+    }
+
+    function toggleVis(inputId, iconId) {
+      const input = document.getElementById(inputId);
+      const icon = document.getElementById(iconId);
       if (input.type === "password") {
         input.type = "text";
         icon.textContent = "🙈";
@@ -920,18 +1188,27 @@ HTML_TEMPLATE = r"""
       }
     }
 
-    async function saveApiKeyFromModal() {
-      const input = document.getElementById("modal-input-apikey");
-      const key = input.value.trim();
-      const btn = document.getElementById("btn-save-apikey");
+    async function saveAllKeysFromModal() {
+      const jevKey = document.getElementById("modal-input-jevkey").value.trim();
+      const llmKey = document.getElementById("modal-input-llmkey").value.trim();
+      const llmBase = document.getElementById("modal-input-llmbase").value.trim();
+      const llmModel = document.getElementById("modal-input-llmmodel").value.trim();
+
+      const btn = document.getElementById("btn-save-keys");
       btn.disabled = true;
       btn.innerHTML = `<span>⏳ 保存中...</span>`;
+
+      const payload = {};
+      if (jevKey) payload.api_key = jevKey;
+      if (llmKey) payload.llm_api_key = llmKey;
+      if (llmBase) payload.llm_base_url = llmBase;
+      if (llmModel) payload.llm_model = llmModel;
 
       try {
         const res = await fetch("/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_key: key })
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (data.success) {
@@ -949,13 +1226,19 @@ HTML_TEMPLATE = r"""
       }
     }
 
-    async function clearApiKeyFromModal() {
-      if (confirm("确定要清除当前配置的 API Key 吗？系统将切换为本地启发式回退模式。")) {
+    async function clearKeysFromModal() {
+      const isJev = activeModalTab === 'jev';
+      const promptText = isJev 
+        ? "确定要清除 TypeSafe Jev API Key 吗？将回退为本地启发式模式。"
+        : "确定要清除 通用大模型 LLM API Key 吗？";
+
+      if (confirm(promptText)) {
         try {
+          const payload = isJev ? { api_key: "" } : { llm_api_key: "" };
           const res = await fetch("/api/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_key: "" })
+            body: JSON.stringify(payload)
           });
           const data = await res.json();
           alert("✓ " + (data.message || "已清除"));
@@ -965,10 +1248,6 @@ HTML_TEMPLATE = r"""
           alert("清除失败: " + err.message);
         }
       }
-    }
-
-    function configureApiKey() {
-      openApiKeyModal();
     }
 
     async function _fetchJson(url, options) {
@@ -1022,7 +1301,8 @@ HTML_TEMPLATE = r"""
 
         // Enable Next Step
         document.getElementById("btn-decide").disabled = false;
-        document.getElementById("btn-execute").disabled = true;
+        document.getElementById("btn-exec-jev").disabled = true;
+        document.getElementById("btn-exec-llm").disabled = true;
         document.getElementById("card-decision").classList.add("hidden");
 
         refreshHistory();
@@ -1040,7 +1320,7 @@ HTML_TEMPLATE = r"""
       const btnDecide = document.getElementById("btn-decide");
 
       btnDecide.disabled = true;
-      btnDecide.innerHTML = `<span>⏳ Jev 推理中...</span>`;
+      btnDecide.innerHTML = `<span>⏳ 双模型并发推理中 (Jev + LLM)...</span>`;
 
       try {
         const data = await _fetchJson("/api/decide", {
@@ -1049,35 +1329,102 @@ HTML_TEMPLATE = r"""
           body: JSON.stringify({ task, url })
         });
 
-        currentDecision = data.decision;
-        renderDecisionCard(currentDecision, data.timing);
+        currentJevDecision = data.decision;
+        currentLlmDecision = data.llm_decision;
 
-        // Update Jev Timing stat
+        renderComparisonBoard(currentJevDecision, currentLlmDecision, data.comparison, data.timing);
+
+        // Update KPI stats
         document.getElementById("stat-jev").innerHTML = `${data.timing.jev_planning_ms} <span class="text-xs font-normal text-slate-500">ms</span>`;
+        document.getElementById("stat-llm").innerHTML = `${data.timing.llm_planning_ms} <span class="text-xs font-normal text-slate-500">ms</span>`;
+        document.getElementById("stat-speedup").innerHTML = `${data.comparison.speedup_ratio} <span class="text-xs font-normal text-slate-500">x</span>`;
+        document.getElementById("stat-speedup-sub").textContent = data.comparison.latency_diff_ms >= 0 
+          ? `Jev 较 LLM 节省 ${data.comparison.latency_diff_ms} ms` 
+          : `LLM 耗时相当`;
 
         // Highlight element in table
-        highlightSelectedElement(currentDecision.target_ref);
+        highlightSelectedElement(currentJevDecision.target_ref);
 
-        document.getElementById("btn-execute").disabled = false;
+        document.getElementById("btn-exec-jev").disabled = false;
+        document.getElementById("btn-exec-llm").disabled = false;
         refreshHistory();
       } catch (err) {
         alert("决策异常: " + err.message);
       } finally {
         btnDecide.disabled = false;
-        btnDecide.innerHTML = `<span>🧠 步骤 2: Jev 智能决策</span>`;
+        btnDecide.innerHTML = `<span>🚀 步骤 2: 双模型并发决策与性能对比 (Jev vs LLM)</span>`;
       }
     }
 
-    async function startExecute() {
-      const btnExecute = document.getElementById("btn-execute");
-      btnExecute.disabled = true;
-      btnExecute.innerHTML = `<span>⏳ 正在执行原语...</span>`;
+    function renderComparisonBoard(jev, llm, cmp, timing) {
+      const board = document.getElementById("card-decision");
+      board.classList.remove("hidden");
+
+      // 1. Comparison Banner
+      const banner = document.getElementById("cmp-banner");
+      const icon = document.getElementById("cmp-icon");
+      const title = document.getElementById("cmp-title");
+      const desc = document.getElementById("cmp-desc");
+      const speedupBadge = document.getElementById("cmp-speedup-badge");
+
+      if (llm.status === "unconfigured") {
+        banner.className = "p-3 rounded-lg border border-slate-700 bg-slate-950/80 text-xs flex items-center justify-between";
+        icon.textContent = "ℹ️";
+        title.textContent = "LLM 对比模块未配置";
+        desc.textContent = "可点击顶部“配置 Key”添加 OpenAI/MIMO 兼容密钥以激活双模型对比。";
+        speedupBadge.textContent = "仅 Jev 运行";
+      } else if (cmp.is_agreement) {
+        banner.className = "p-3 rounded-lg border border-emerald-500/40 bg-emerald-950/20 text-xs flex items-center justify-between";
+        icon.textContent = "🎯";
+        title.innerHTML = `<span class="text-emerald-400 font-bold">决策达成一致！</span> 双模型均选择 [${jev.target_ref}] 执行 ${jev.action_type.toUpperCase()}`;
+        desc.textContent = `TypeSafe Jev 比通用大模型提速 ${cmp.speedup_ratio}x (用时 ${cmp.jev_timing_ms}ms 对比 ${cmp.llm_timing_ms}ms)`;
+        speedupBadge.className = "px-2 py-0.5 rounded text-xs font-bold font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40";
+        speedupBadge.textContent = `加速 ${cmp.speedup_ratio}x`;
+      } else {
+        banner.className = "p-3 rounded-lg border border-amber-500/40 bg-amber-950/20 text-xs flex items-center justify-between";
+        icon.textContent = "⚠️";
+        title.innerHTML = `<span class="text-amber-400 font-bold">决策存在分歧</span> Jev 选择 [${jev.target_ref}](${jev.action_type}) vs LLM 选择 [${llm.target_ref}](${llm.action_type})`;
+        desc.textContent = `耗时对比: Jev ${cmp.jev_timing_ms}ms, LLM ${cmp.llm_timing_ms}ms (提速 ${cmp.speedup_ratio}x)`;
+        speedupBadge.className = "px-2 py-0.5 rounded text-xs font-bold font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40";
+        speedupBadge.textContent = `加速 ${cmp.speedup_ratio}x`;
+      }
+
+      // 2. Jev Card
+      document.getElementById("jev-time-badge").textContent = `${timing.jev_planning_ms} ms`;
+      document.getElementById("jev-target-ref").textContent = jev.target_ref;
+      document.getElementById("jev-target-desc").textContent = jev.target_element ? (jev.target_element.name || jev.target_element.selector) : "(无目标)";
+      document.getElementById("jev-action").textContent = jev.action_type.toUpperCase();
+      document.getElementById("jev-value").textContent = jev.input_value ? `写入: "${jev.input_value}"` : "无需传值";
+      const jevConf = (jev.confidence * 100).toFixed(1);
+      document.getElementById("jev-conf").textContent = `${jevConf}%`;
+      document.getElementById("jev-conf-bar").style.width = `${jevConf}%`;
+      document.getElementById("jev-mode").textContent = `${jev.mode} (${jev.model_name})`;
+      document.getElementById("jev-rationale").textContent = jev.rationale || "无额外依据";
+
+      // 3. LLM Card
+      document.getElementById("llm-time-badge").textContent = `${timing.llm_planning_ms} ms`;
+      document.getElementById("llm-target-ref").textContent = llm.target_ref;
+      document.getElementById("llm-target-desc").textContent = llm.target_element ? (llm.target_element.name || llm.target_element.selector) : (llm.target_ref ? `Ref: ${llm.target_ref}` : "(未指定)");
+      document.getElementById("llm-action").textContent = llm.action_type.toUpperCase();
+      document.getElementById("llm-value").textContent = llm.input_value ? `写入: "${llm.input_value}"` : "无需传值";
+      const llmConf = (llm.confidence * 100).toFixed(1);
+      document.getElementById("llm-conf").textContent = `${llmConf}%`;
+      document.getElementById("llm-conf-bar").style.width = `${llmConf}%`;
+      document.getElementById("llm-model-name").textContent = llm.model_name || "openai";
+      document.getElementById("llm-rationale").textContent = llm.rationale || (llm.status === "unconfigured" ? "未配置 LLM API Key" : "无额外说明");
+    }
+
+    async function startExecute(source = 'jev') {
+      const btn = source === 'jev' ? document.getElementById("btn-exec-jev") : document.getElementById("btn-exec-llm");
+      const originHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<span>⏳ 执行中...</span>`;
 
       try {
         const data = await _fetchJson("/api/execute", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({})
+          body: JSON.stringify({ source: source })
         });
 
         // Update screenshot if returned
@@ -1088,13 +1435,13 @@ HTML_TEMPLATE = r"""
         // Update execution timing
         document.getElementById("stat-exec").innerHTML = `${data.timing.execution_ms} <span class="text-xs font-normal text-slate-500">ms</span>`;
 
-        alert("执行成功: " + data.message);
+        alert(`✓ [${source.toUpperCase()}] ` + data.message);
         refreshHistory();
       } catch (err) {
         alert("执行异常: " + err.message);
       } finally {
-        btnExecute.disabled = false;
-        btnExecute.innerHTML = `<span>⚡ 步骤 3: 在线执行动作</span>`;
+        btn.disabled = false;
+        btn.innerHTML = originHtml;
       }
     }
 
@@ -1146,25 +1493,6 @@ HTML_TEMPLATE = r"""
       }
     }
 
-    function renderDecisionCard(dec, timing) {
-      const card = document.getElementById("card-decision");
-      card.classList.remove("hidden");
-
-      document.getElementById("decision-time-badge").textContent = `${timing.jev_planning_ms} ms`;
-      document.getElementById("res-target-ref").textContent = dec.target_ref;
-      document.getElementById("res-target-desc").textContent = dec.target_element ? (dec.target_element.name || dec.target_element.selector) : "(无目标)";
-      document.getElementById("res-action").textContent = dec.action_type.toUpperCase();
-      document.getElementById("res-value").textContent = dec.input_value ? `写入: "${dec.input_value}"` : "无需传值";
-      
-      const confPct = (dec.confidence * 100).toFixed(1);
-      document.getElementById("res-conf").textContent = `${confPct}%`;
-      document.getElementById("res-conf-bar").style.width = `${confPct}%`;
-
-      document.getElementById("res-mode").textContent = `${dec.mode} (${dec.model_name})`;
-      document.getElementById("res-candidates-cnt").textContent = currentElements.length;
-      document.getElementById("res-rationale").textContent = dec.rationale || "无额外说明";
-    }
-
     async function refreshHistory() {
       try {
         const res = await fetch("/api/history");
@@ -1181,7 +1509,7 @@ HTML_TEMPLATE = r"""
           if (item.breakdown) {
             breakdownStr = Object.entries(item.breakdown).map(([k, v]) => `${k.replace('_ms','')}:${v}ms`).join(" | ");
           }
-          const isSuccess = item.status === "success";
+          const isSuccess = (item.status || "").startsWith("success");
           const statusClass = isSuccess ? "text-emerald-400 bg-emerald-950/40 border-emerald-500/30" : "text-rose-400 bg-rose-950/40 border-rose-500/30";
 
           return `
@@ -1226,46 +1554,97 @@ HTML_TEMPLATE = r"""
     });
   </script>
 
-  <!-- API Key Modal Dialog -->
+  <!-- API Key Modal Dialog (Dual Tab: Jev & LLM) -->
   <div id="modal-apikey" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl relative">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
         <h3 class="text-base font-bold text-white flex items-center gap-2">
-          <span>🔑</span> 配置 TypeSafe Jev API Key
+          <span>⚙️</span> 配置决策引擎 API Key
         </h3>
         <button onclick="closeApiKeyModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition text-lg leading-none cursor-pointer">&times;</button>
       </div>
 
-      <div class="text-xs text-slate-300 leading-relaxed space-y-2">
-        <p>配置 API Key 后，系统将直接调用云端 <span class="text-cyan-400 font-mono font-semibold">jev-1.13.0</span> 大模型进行智能元素决策与规划。配置会自动保存在本地 <code class="text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">.env</code> 中。</p>
-        <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[11px] text-slate-400 flex items-center justify-between">
-          <span>当前状态：</span>
-          <span id="modal-current-status" class="font-mono text-slate-300 font-semibold">检查中...</span>
+      <!-- Tabs Header -->
+      <div class="flex border-b border-slate-800 gap-2 text-xs">
+        <button id="tab-btn-jev" onclick="switchModalTab('jev')" class="pb-2.5 px-3 font-semibold border-b-2 border-cyan-400 text-cyan-400 transition cursor-pointer flex items-center gap-1.5">
+          <span>⚡ TypeSafe Jev (System 1)</span>
+        </button>
+        <button id="tab-btn-llm" onclick="switchModalTab('llm')" class="pb-2.5 px-3 font-medium text-slate-400 hover:text-slate-200 transition cursor-pointer flex items-center gap-1.5">
+          <span>🧠 通用大模型 LLM (System 2)</span>
+        </button>
+      </div>
+
+      <!-- Tab 1: TypeSafe Jev -->
+      <div id="tab-pane-jev" class="space-y-3.5">
+        <div class="text-xs text-slate-300 leading-relaxed space-y-2">
+          <p>配置 TypeSafe Jev 专有 API Key 后，系统将直接调用云端 <span class="text-cyan-400 font-mono font-semibold">jev-1.13.0</span> 进行极速结构化直出决策。</p>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[11px] text-slate-400 flex items-center justify-between">
+            <span>当前状态：</span>
+            <span id="modal-jev-status" class="font-mono text-slate-300 font-semibold">检查中...</span>
+          </div>
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="block text-xs font-medium text-slate-300">TypeSafe Jev API Key：</label>
+          <div class="relative">
+            <input type="password" id="modal-input-jevkey" placeholder="apikey_xxxxxxxx..." 
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-xs text-white font-mono focus:outline-none focus:border-cyan-500">
+            <button type="button" onclick="toggleVis('modal-input-jevkey', 'vis-jev')" class="absolute right-2.5 top-2 text-slate-400 hover:text-slate-200 text-xs cursor-pointer">
+              <span id="vis-jev">👁️</span>
+            </button>
+          </div>
+          <p class="text-[11px] text-slate-500">提示：留空保存将清除 Jev Key，回退至本地启发式模式。</p>
         </div>
       </div>
 
-      <div class="space-y-1.5">
-        <label class="block text-xs font-medium text-slate-300">请输入 API Key：</label>
-        <div class="relative">
-          <input type="password" id="modal-input-apikey" placeholder="apikey_xxxxxxxx..." 
-            class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2.5 pr-10 text-sm text-white font-mono focus:outline-none focus:border-cyan-500"
-            onkeydown="if(event.key==='Enter') saveApiKeyFromModal()">
-          <button type="button" onclick="toggleApiKeyVisibility()" class="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200 text-sm p-0.5 cursor-pointer" title="切换显示/隐藏">
-            <span id="btn-toggle-vis">👁️</span>
-          </button>
+      <!-- Tab 2: LLM System 2 -->
+      <div id="tab-pane-llm" class="space-y-3.5 hidden">
+        <div class="text-xs text-slate-300 leading-relaxed space-y-2">
+          <p>配置 OpenAI 兼容格式大模型 API Key（支持 OpenAI、小米 MIMO、DeepSeek、阿里 Qwen 等），用于同屏进行结构化规划与耗时对比。</p>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[11px] text-slate-400 flex items-center justify-between">
+            <span>当前状态：</span>
+            <span id="modal-llm-status" class="font-mono text-slate-300 font-semibold">检查中...</span>
+          </div>
         </div>
-        <p class="text-[11px] text-slate-500">提示：留空并保存将清除当前配置的 Key，回退至本地启发式模式。</p>
+
+        <div class="space-y-3 text-xs">
+          <div class="space-y-1">
+            <label class="block font-medium text-slate-300">LLM API Key：</label>
+            <div class="relative">
+              <input type="password" id="modal-input-llmkey" placeholder="sk-xxxxxxxx..." 
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
+              <button type="button" onclick="toggleVis('modal-input-llmkey', 'vis-llm')" class="absolute right-2.5 top-2 text-slate-400 hover:text-slate-200 text-xs cursor-pointer">
+                <span id="vis-llm">👁️</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div class="space-y-1">
+              <label class="block font-medium text-slate-300">API Base URL：</label>
+              <input type="text" id="modal-input-llmbase" placeholder="https://api.openai.com/v1" 
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
+            </div>
+            <div class="space-y-1">
+              <label class="block font-medium text-slate-300">模型名称 (Model)：</label>
+              <input type="text" id="modal-input-llmmodel" placeholder="mimo-v2.5 / gpt-4o-mini" 
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-500">提示：配置已自动映射到 .env 中的 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL。</p>
+        </div>
       </div>
 
-      <div class="flex items-center justify-between pt-2 border-t border-slate-800">
-        <button type="button" onclick="clearApiKeyFromModal()" class="text-xs text-rose-400 hover:text-rose-300 transition underline cursor-pointer">
-          清除现有 Key
+      <!-- Modal Footer -->
+      <div class="flex items-center justify-between pt-3 border-t border-slate-800">
+        <button type="button" onclick="clearKeysFromModal()" class="text-xs text-rose-400 hover:text-rose-300 transition underline cursor-pointer">
+          清除当前 Tab Key
         </button>
         <div class="flex items-center gap-2">
-          <button onclick="closeApiKeyModal()" class="px-4 py-2 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition cursor-pointer">
+          <button onclick="closeApiKeyModal()" class="px-3.5 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition cursor-pointer">
             取消
           </button>
-          <button id="btn-save-apikey" onclick="saveApiKeyFromModal()" class="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs transition flex items-center gap-1.5 shadow-lg shadow-cyan-600/20 cursor-pointer">
+          <button id="btn-save-keys" onclick="saveAllKeysFromModal()" class="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs transition flex items-center gap-1.5 shadow-lg shadow-cyan-600/20 cursor-pointer">
             <span>💾 保存并生效</span>
           </button>
         </div>

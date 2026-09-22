@@ -73,7 +73,7 @@ def test_api_decide_and_history(client):
     assert hist_data["total_time_ms"] >= 0
     assert hist_data["counts"]["jev"] >= 1
     latest = hist_data["history"][0]
-    assert latest["step"] == "JEV_PLAN"
+    assert latest["step"] in ("JEV_PLAN", "DECIDE_COMPARE")
     assert "timing_ms" in latest
     assert "breakdown" in latest
 
