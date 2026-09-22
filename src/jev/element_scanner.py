@@ -25,6 +25,19 @@ class ScannedElement(BaseModel):
     @property
     def description(self) -> str:
         """Compact 1-line description formatted for Jev prompt criteria."""
+        if self.tag in ("input", "textarea") or self.role in ("searchbox", "textbox"):
+            parts = [f"<{self.tag} role='{self.role}' (Editable Input Field)>"]
+            if self.name and self.name not in ("搜索输入框", "文本输入框"):
+                parts.append(f"label='{self.name[:35]}'")
+            elif self.name:
+                parts.append(f"role_desc='{self.name}'")
+            if self.placeholder:
+                parts.append(f"placeholder='{self.placeholder[:35]}' (recommendation hint)")
+            if self.value:
+                parts.append(f"val='{self.value[:30]}'")
+            parts.append(f"sel='{self.selector}'")
+            return " | ".join(parts)
+
         parts = [f"<{self.tag} role='{self.role}'>"]
         if self.name:
             parts.append(f"text='{self.name[:40]}'")
@@ -96,19 +109,28 @@ _ELEMENT_SCAN_JS = r"""
     if (explicit) return explicit.toLowerCase();
     const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute('type') || '').toLowerCase();
+    const id = (el.id || '').toLowerCase();
+    const cls = (el.className || '').toString().toLowerCase();
+    const nameAttr = (el.getAttribute('name') || '').toLowerCase();
+
     if (tag === 'a' && el.hasAttribute('href')) return 'link';
     if (tag === 'button') return 'button';
-    if (tag === 'textarea') return 'textbox';
     if (tag === 'select') return 'combobox';
-    if (tag === 'input') {
+
+    // Input & Textarea Role Detection
+    if (tag === 'input' || tag === 'textarea') {
       if (type === 'checkbox') return 'checkbox';
       if (type === 'radio') return 'radio';
-      if (type === 'search') return 'searchbox';
       if (type === 'submit' || type === 'button') return 'button';
+      if (type === 'search' || 
+          id.includes('search') || id.includes('kw') || id.includes('chat') ||
+          cls.includes('search') || cls.includes('chat') ||
+          nameAttr.includes('search') || nameAttr.includes('wd') || nameAttr.includes('query')) {
+        return 'searchbox';
+      }
       return 'textbox';
     }
     if (el.hasAttribute('contenteditable')) return 'textbox';
-    const cls = (el.className || '').toString().toLowerCase();
     if (cls.includes('btn') || cls.includes('button')) return 'button';
     if (cls.includes('search-input') || cls.includes('search_input')) return 'searchbox';
     if (el.onclick || el.getAttribute('tabindex') === '0') return 'button';
@@ -143,21 +165,52 @@ _ELEMENT_SCAN_JS = r"""
 
     const tag = el.tagName.toLowerCase();
     const rect = el.getBoundingClientRect();
+    const isInput = (tag === 'input' || tag === 'textarea' || el.hasAttribute('contenteditable'));
+
     let name = '';
-    if (el.innerText) {
-      name = truncate(el.innerText, 50);
-    }
-    if (!name && el.getAttribute('aria-label')) {
-      name = truncate(el.getAttribute('aria-label'), 50);
-    }
-    if (!name && el.getAttribute('title')) {
-      name = truncate(el.getAttribute('title'), 50);
-    }
-    if (!name && el.getAttribute('value')) {
-      name = truncate(el.getAttribute('value'), 50);
+    if (isInput) {
+      // For input/textarea, accessible name must NOT blindly grab innerText / placeholder recommendations
+      if (el.getAttribute('aria-label')) {
+        name = truncate(el.getAttribute('aria-label'), 50);
+      } else if (el.id) {
+        const labelEl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (labelEl && labelEl.innerText) {
+          name = truncate(labelEl.innerText, 50);
+        }
+      }
+      if (!name && el.getAttribute('title')) {
+        name = truncate(el.getAttribute('title'), 50);
+      }
+      // If no explicit label, assign clear semantic role name
+      if (!name) {
+        const idLower = (el.id || '').toLowerCase();
+        if (role === 'searchbox' || idLower.includes('search') || idLower.includes('kw') || idLower.includes('chat')) {
+          name = '搜索输入框';
+        } else {
+          name = '文本输入框';
+        }
+      }
+    } else {
+      if (el.innerText) {
+        name = truncate(el.innerText, 50);
+      }
+      if (!name && el.getAttribute('aria-label')) {
+        name = truncate(el.getAttribute('aria-label'), 50);
+      }
+      if (!name && el.getAttribute('title')) {
+        name = truncate(el.getAttribute('title'), 50);
+      }
+      if (!name && el.getAttribute('value')) {
+        name = truncate(el.getAttribute('value'), 50);
+      }
     }
 
-    const placeholder = el.getAttribute('placeholder') || '';
+    // Capture placeholder (or innerText recommendations in textarea)
+    let rawPlaceholder = el.getAttribute('placeholder') || '';
+    if (!rawPlaceholder && isInput && el.innerText && el.innerText.trim() !== name) {
+      rawPlaceholder = el.innerText.trim();
+    }
+    const placeholder = truncate(rawPlaceholder, 50);
     const value = el.value || '';
     const selector = getBestSelector(el);
 

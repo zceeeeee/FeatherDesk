@@ -87,10 +87,41 @@ class JevPlanner:
         """Make live request to TypeSafe Jev API."""
         from typesafe_sdk import Choice, Noul, TypeSafeClient
 
-        # Build candidate criteria for top elements (max 30 to fit single call)
+        # Prioritize candidates relevant to the user intent (input/search vs click)
+        task_lower = task.lower()
+        is_fill_intent = any(w in task_lower for w in ["输入", "搜索", "填", "type", "search", "fill", "query"])
+
+        def _candidate_relevance(el: ScannedElement) -> int:
+            rel = 0
+            if is_fill_intent:
+                if el.role == "searchbox":
+                    rel += 100
+                elif el.role == "textbox" or el.tag in ("input", "textarea"):
+                    rel += 80
+                elif el.role == "button" and any(k in (el.name + " " + el.selector).lower() for k in ("搜索", "search", "百度一下", "submit", "查询")):
+                    rel += 50
+                elif el.role == "button":
+                    rel += 10
+                elif el.role == "link":
+                    rel += 1
+            else:
+                if el.role in ("button", "link"):
+                    rel += 30
+                    for kw in task_lower.split():
+                        if len(kw) >= 2 and kw in el.name.lower():
+                            rel += 40
+                elif el.role in ("searchbox", "textbox"):
+                    rel += 10
+            return rel
+
+        # Sort elements by task relevance to ensure high-priority candidates are evaluated first
+        ranked_elements = sorted(elements, key=_candidate_relevance, reverse=True)
+        # Select top 16 candidates to keep LLM response time under 2-3s and eliminate timeouts
+        selected_candidates = ranked_elements[:16]
+
         criteria_map: Dict[str, Optional[str]] = {}
         element_by_ref: Dict[str, ScannedElement] = {}
-        for el in elements[:30]:
+        for el in selected_candidates:
             criteria_map[el.ref] = el.description
             element_by_ref[el.ref] = el
         criteria_map["none"] = "None of the elements match the required task"
@@ -104,7 +135,7 @@ class JevPlanner:
             "complete": "Goal is already complete, no action needed",
         }
 
-        with TypeSafeClient(api_key=self.api_key) as client:
+        with TypeSafeClient(api_key=self.api_key, timeout=15.0) as client:
             response = client.system_one(
                 model=self.model,
                 state={
@@ -115,7 +146,11 @@ class JevPlanner:
                 },
                 questions={
                     "target_element": Choice(
-                        instructions="Which element should be operated on to achieve the user task?",
+                        instructions=(
+                            "Which element should be operated on to achieve the user task? "
+                            "Note: Search inputs or textareas may contain dynamic recommendation placeholders or hints. "
+                            "If the task requires typing or searching, select the editable search/text input field."
+                        ),
                         criteria=criteria_map,
                     ),
                     "action_type": Choice(
@@ -188,7 +223,9 @@ class JevPlanner:
                          any(k in el_meta for k in ("pass", "pwd")):
                         score += 10
                     elif ("搜索" in task_lower or "search" in task_lower or "kw" in task_lower) and \
-                         any(k in el_meta for k in ("search", "kw", "query", "q")):
+                          (el.role == "searchbox" or any(k in el_meta for k in ("search", "kw", "query", "chat", "q"))):
+                        score += 15
+                    elif el.role == "searchbox":
                         score += 10
                     if score > best_input_score:
                         best_input_score = score

@@ -1107,14 +1107,34 @@ HTML_TEMPLATE = r"""
         return;
       }
 
-      tbody.innerHTML = elements.map(e => `
-        <tr id="row-${e.ref}" class="hover:bg-slate-800/40 transition">
-          <td class="py-2 px-3 font-bold text-cyan-400">${e.ref}</td>
-          <td class="py-2 px-3 text-slate-300 font-mono">${e.tag} <span class="text-slate-500">[${e.role}]</span></td>
-          <td class="py-2 px-3 text-slate-200 max-w-[200px] truncate" title="${e.name || e.placeholder || ''}">${e.name || e.placeholder || '<span class="text-slate-500">(空)</span>'}</td>
-          <td class="py-2 px-3 text-emerald-400 font-mono max-w-[220px] truncate" title="${e.selector}">${e.selector}</td>
-        </tr>
-      `).join("");
+      tbody.innerHTML = elements.map(e => {
+        let labelHtml = '';
+        if (e.name && e.placeholder) {
+          labelHtml = `<span>${e.name}</span> <span class="text-slate-400 text-xs italic">[提示: ${e.placeholder}]</span>`;
+        } else if (e.name) {
+          labelHtml = `<span>${e.name}</span>`;
+        } else if (e.placeholder) {
+          labelHtml = `<span class="text-slate-400 text-xs italic">[提示: ${e.placeholder}]</span>`;
+        } else {
+          labelHtml = `<span class="text-slate-500">(空)</span>`;
+        }
+
+        const isSearch = e.role === 'searchbox' || (e.selector && (e.selector.includes('kw') || e.selector.includes('chat')));
+        const roleBadge = isSearch 
+          ? `<span class="text-amber-400 font-semibold">[searchbox]</span>` 
+          : `<span class="text-slate-500">[${e.role}]</span>`;
+
+        return `
+          <tr id="row-${e.ref}" class="hover:bg-slate-800/40 transition">
+            <td class="py-2 px-3 font-bold text-cyan-400">${e.ref}</td>
+            <td class="py-2 px-3 text-slate-300 font-mono">${e.tag} ${roleBadge}</td>
+            <td class="py-2 px-3 text-slate-200 max-w-[200px] truncate" title="${e.name} ${e.placeholder ? '提示词: ' + e.placeholder : ''}">
+              ${labelHtml}
+            </td>
+            <td class="py-2 px-3 text-emerald-400 font-mono max-w-[220px] truncate" title="${e.selector}">${e.selector}</td>
+          </tr>
+        `;
+      }).join("");
     }
 
     function highlightSelectedElement(ref) {

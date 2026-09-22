@@ -78,30 +78,41 @@ def test_api_decide_and_history(client):
     assert "breakdown" in latest
 
 
-def test_api_config(client):
-    # Test GET config
-    res = client.get("/api/config")
-    assert res.status_code == 200
-    data = res.get_json()
-    assert "configured" in data
-    assert "masked_key" in data
+def test_api_config(client, tmp_path, monkeypatch):
+    import os
+    test_env = tmp_path / ".env"
+    monkeypatch.setattr("src.jev.web_app._env_path", test_env)
+    orig_key = os.environ.get("TYPESAFE_API_KEY")
 
-    # Test POST config to set dummy key
-    dummy_key = "apikey_1234567890abcdef1234567890abcdef"
-    res_set = client.post("/api/config", json={"api_key": dummy_key})
-    assert res_set.status_code == 200
-    set_data = res_set.get_json()
-    assert set_data["success"] is True
-    assert set_data["configured"] is True
-    assert "..." in set_data["masked_key"]
+    try:
+        # Test GET config
+        res = client.get("/api/config")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert "configured" in data
+        assert "masked_key" in data
 
-    # Verify status reflects key
-    res_status = client.get("/api/status")
-    assert res_status.get_json()["has_api_key"] is True
+        # Test POST config to set dummy key
+        dummy_key = "apikey_1234567890abcdef1234567890abcdef"
+        res_set = client.post("/api/config", json={"api_key": dummy_key})
+        assert res_set.status_code == 200
+        set_data = res_set.get_json()
+        assert set_data["success"] is True
+        assert set_data["configured"] is True
+        assert "..." in set_data["masked_key"]
 
-    # Test POST config with empty to clear key
-    res_clear = client.post("/api/config", json={"api_key": ""})
-    assert res_clear.status_code == 200
-    clear_data = res_clear.get_json()
-    assert clear_data["success"] is True
-    assert clear_data["configured"] is False
+        # Verify status reflects key
+        res_status = client.get("/api/status")
+        assert res_status.get_json()["has_api_key"] is True
+
+        # Test POST config with empty to clear key
+        res_clear = client.post("/api/config", json={"api_key": ""})
+        assert res_clear.status_code == 200
+        clear_data = res_clear.get_json()
+        assert clear_data["success"] is True
+        assert clear_data["configured"] is False
+    finally:
+        if orig_key is not None:
+            os.environ["TYPESAFE_API_KEY"] = orig_key
+        else:
+            os.environ.pop("TYPESAFE_API_KEY", None)

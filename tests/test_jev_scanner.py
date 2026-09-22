@@ -26,10 +26,22 @@ def test_scanned_element_description():
         bbox={"x": 100, "y": 200, "width": 400, "height": 40},
     )
     desc = el.description
-    assert "<input role='searchbox'>" in desc
-    assert "text='百度搜索'" in desc
-    assert "placeholder='请输入关键词'" in desc
+    assert "<input role='searchbox' (Editable Input Field)>" in desc
+    assert "label='百度搜索'" in desc
+    assert "placeholder='请输入关键词' (recommendation hint)" in desc
     assert "sel='#kw'" in desc
+
+    # Non-input element
+    btn = ScannedElement(
+        ref="e2",
+        tag="button",
+        role="button",
+        name="百度一下",
+        selector="#su",
+    )
+    btn_desc = btn.description
+    assert "<button role='button'>" in btn_desc
+    assert "text='百度一下'" in btn_desc
 
 
 def test_heuristic_planner_decision():
