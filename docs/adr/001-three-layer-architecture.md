@@ -198,7 +198,21 @@ locators:
 - Layer 1 保持简单，不引入不必要的抽象
 - 允许在脚本中直接调用 Layer 1，绕过 Layer 2
 
+## 架构演化与现行状态 (Evolution & Current State)
+
+在实际工程迭代中，三层架构根据业务场景扩展演进如下：
+
+1. **扩展出 Layer 0（交互中介与门面层）**：
+   - 引入 `UserInteractionBroker` 与 `PanelManager` 作为 Layer 0，负责将人机交互（提问、确认、扫码等待）通过进程外桌面 UI 与 MCP 协议解耦呈现，避免对宿主页面 DOM 进行破坏性注入。
+2. **Layer 1 扩展桌面原生自动化**：
+   - Layer 1 不再仅限于 Playwright 浏览器原子操作，还纳入了基于 Windows Win32 / `pywinauto` 的微信客户端自动化 (`wechat_client.py`)，以及基于 Windows COM 的 WPS / Word 文档导出能力 (`wps_writer.py`)。
+3. **Layer 2 允许适度快捷调用**：
+   - 为减少深层包装带来的维护成本，`controls.py` 中对部分高频浏览器控制（如页面前进后退、截图、快捷执行 JS）允许直接调用当前激活 `Page` 的快捷方法。
+4. **Layer 3 融入专用提取器**：
+   - 除了声明式的 `domains/*.yaml` 站点选择器与自愈写回器（`config_updater.py`）之外，针对高难度动态平台（如 BOSS 直聘、淘宝）引入了专用的 DOM 与数据解析器。
+
 ## 相关决策
 
 - [ADR-002: 沙箱脚本引擎](002-sandboxed-script-engine.md)
 - [ADR-003: Agent 循环设计](003-agent-loop-design.md)
+

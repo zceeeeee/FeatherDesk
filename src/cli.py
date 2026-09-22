@@ -5,6 +5,9 @@ Subcommands:
     serve   -- Start the MCP server (stdio / sse / streamable-http)
     run     -- Execute a one-shot natural-language task and exit
     doctor  -- Diagnose environment health
+    setup   -- Interactive configuration wizard
+    gui     -- Start the Web GUI server
+    desktop -- Launch the FeatherDesk desktop application
 """
 
 from __future__ import annotations
