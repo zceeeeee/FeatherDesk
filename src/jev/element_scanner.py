@@ -25,7 +25,7 @@ class ScannedElement(BaseModel):
     @property
     def description(self) -> str:
         """Compact 1-line description formatted for Jev prompt criteria."""
-        if self.tag in ("input", "textarea") or self.role in ("searchbox", "textbox"):
+        if self.role in ("searchbox", "textbox"):
             parts = [f"<{self.tag} role='{self.role}' (Editable Input Field)>"]
             if self.name and self.name not in ("搜索输入框", "文本输入框"):
                 parts.append(f"label='{self.name[:35]}'")
@@ -39,11 +39,12 @@ class ScannedElement(BaseModel):
             return " | ".join(parts)
 
         parts = [f"<{self.tag} role='{self.role}'>"]
-        if self.name:
-            parts.append(f"text='{self.name[:40]}'")
+        text_val = self.name or (self.value if self.role == "button" else "")
+        if text_val:
+            parts.append(f"text='{text_val[:40]}'")
         if self.placeholder:
             parts.append(f"placeholder='{self.placeholder[:40]}'")
-        if self.value:
+        if self.value and not text_val:
             parts.append(f"val='{self.value[:30]}'")
         parts.append(f"sel='{self.selector}'")
         return " | ".join(parts)
@@ -167,8 +168,30 @@ _ELEMENT_SCAN_JS = r"""
     const rect = el.getBoundingClientRect();
     const isInput = (tag === 'input' || tag === 'textarea' || el.hasAttribute('contenteditable'));
 
+    let currentRole = role;
+    const isReadOnly = isInput && (el.disabled || el.readOnly || el.hasAttribute('readonly') || el.getAttribute('aria-disabled') === 'true');
+    if (isReadOnly) {
+      currentRole = 'readonly_textbox';
+    }
+
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const isButton = (currentRole === 'button' || type === 'submit' || type === 'button');
+    const isTextEntry = !isButton && (tag === 'input' || tag === 'textarea' || el.hasAttribute('contenteditable'));
+
     let name = '';
-    if (isInput) {
+    if (isButton) {
+      if (el.value) {
+        name = truncate(el.value, 50);
+      } else if (el.innerText) {
+        name = truncate(el.innerText, 50);
+      }
+      if (!name && el.getAttribute('aria-label')) {
+        name = truncate(el.getAttribute('aria-label'), 50);
+      }
+      if (!name && el.getAttribute('title')) {
+        name = truncate(el.getAttribute('title'), 50);
+      }
+    } else if (isTextEntry && !isReadOnly) {
       // For input/textarea, accessible name must NOT blindly grab innerText / placeholder recommendations
       if (el.getAttribute('aria-label')) {
         name = truncate(el.getAttribute('aria-label'), 50);
@@ -184,12 +207,14 @@ _ELEMENT_SCAN_JS = r"""
       // If no explicit label, assign clear semantic role name
       if (!name) {
         const idLower = (el.id || '').toLowerCase();
-        if (role === 'searchbox' || idLower.includes('search') || idLower.includes('kw') || idLower.includes('chat')) {
+        if (currentRole === 'searchbox' || idLower.includes('search') || idLower.includes('kw') || idLower.includes('chat')) {
           name = '搜索输入框';
         } else {
           name = '文本输入框';
         }
       }
+    } else if (isReadOnly) {
+      name = '只读文本框';
     } else {
       if (el.innerText) {
         name = truncate(el.innerText, 50);
@@ -207,7 +232,7 @@ _ELEMENT_SCAN_JS = r"""
 
     // Capture placeholder (or innerText recommendations in textarea)
     let rawPlaceholder = el.getAttribute('placeholder') || '';
-    if (!rawPlaceholder && isInput && el.innerText && el.innerText.trim() !== name) {
+    if (!rawPlaceholder && isTextEntry && el.innerText && el.innerText.trim() !== name) {
       rawPlaceholder = el.innerText.trim();
     }
     const placeholder = truncate(rawPlaceholder, 50);
@@ -216,7 +241,7 @@ _ELEMENT_SCAN_JS = r"""
 
     candidates.push({
       tag,
-      role,
+      role: currentRole,
       name,
       placeholder,
       value: truncate(value, 30),
